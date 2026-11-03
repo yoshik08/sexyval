@@ -1,0 +1,33 @@
+appId: com.sexyval.app
+productName: SexyVal
+copyright: Personal use only. Not affiliated with Riot Games.
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist-electron/**/*
+  - dist-renderer/**/*
+  - build/icon.png
+  - build/icons/*.png
+  - package.json
+asar: true
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+portable:
+  artifactName: ${productName}-Portable-${version}.${ext}
+# Icon files Windows itself reads (shortcuts, taskbar) must live outside the asar archive.
+extraResources:
+  - from: build/icons
+    to: icons
+    filter: ['*.ico']

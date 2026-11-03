@@ -1,0 +1,541 @@
+@import '@fontsource-variable/geist/index.css';
+@import '@fontsource-variable/archivo/wdth.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+
+  /* Motion tokens. One signature curve for almost everything (exponential ease-out). */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-press: 120ms;
+  --dur-quick: 160ms;
+  --dur-fast: 240ms;
+  --dur-sheet: 380ms;
+
+  /* Surfaces */
+  --bg: #000;
+  --surface: #0b0b0d;
+  --raised: #151517;
+  --hairline: rgba(255, 255, 255, 0.08);
+  --material: rgba(20, 20, 22, 0.74);
+
+  --sidebar-w: 236px;
+  --titlebar: 40px;
+}
+/* Small windows: give the page the room, not the chrome. */
+@media (max-width: 1279px) {
+  :root {
+    --sidebar-w: 204px;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg font-sans text-base text-ink antialiased;
+  font-variant-numeric: tabular-nums;
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  user-select: none;
+  caret-color: #fff;
+}
+
+::selection {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Browser surfaces carry the design too: scrollbars, selects, range inputs. */
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+/* Horizontal rails (skin chips) scroll with wheel/drag; the fade at the edge is the hint. */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.rail-fade {
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.26);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+/* Chromium's UA sheet gives buttons align-items:flex-start, which collapses column-flex children to
+   their content width. Stretch is what every layout here assumes; utilities (items-center) still win. */
+@layer base {
+  button {
+    align-items: stretch;
+  }
+}
+input[type='checkbox'] {
+  accent-color: #fff;
+}
+select option {
+  background: #151517;
+  color: #f5f5f7;
+}
+::placeholder {
+  color: #76767b;
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ---------- Type ---------- */
+/* Archivo is a variable-width face: titles run expanded (like SF Pro Expanded), tracking tightens with size. */
+.t-display {
+  font-family: 'Archivo Variable', system-ui, sans-serif;
+  font-stretch: 122%;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+  text-wrap-style: balance; /* style only: `text-wrap` would also reset wrapping and break `truncate` */
+}
+.t-title {
+  font-family: 'Archivo Variable', system-ui, sans-serif;
+  font-stretch: 112%;
+  font-weight: 700;
+  letter-spacing: -0.024em;
+  line-height: 1.08;
+  text-wrap-style: balance; /* style only: `text-wrap` would also reset wrapping and break `truncate` */
+}
+.t-head {
+  font-family: 'Archivo Variable', system-ui, sans-serif;
+  font-stretch: 100%;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+  line-height: 1.15;
+}
+.t-num {
+  font-family: 'Archivo Variable', system-ui, sans-serif;
+  font-stretch: 112%;
+  font-weight: 660;
+  letter-spacing: -0.012em;
+  font-variant-numeric: tabular-nums;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+/* Legacy helper used across screens: quiet secondary text, sentence case. */
+.label {
+  @apply text-xs font-medium text-muted;
+}
+.uppercase {
+  text-transform: none;
+} /* legacy screens set uppercase labels; the new language is sentence case */
+.text-pretty {
+  text-wrap-style: pretty;
+}
+
+/* ---------- Size-aware layout ----------
+   Components adapt to the width they actually get (container queries), not to the window, so the
+   same tile or table reads well in a grid cell, a sidebar or a small window. */
+
+/* Skin tile caption: name and price side by side; stacked once the tile is too narrow for both. */
+.tile-meta {
+  container-type: inline-size;
+}
+@container (max-width: 270px) {
+  .tile-meta-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .tile-meta-row > .tile-price {
+    padding-top: 0;
+    text-align: left;
+  }
+}
+
+/* In-game team table: full columns when there is room; compact (rank icon only, tighter stats) when not. */
+.ig-team {
+  container-type: inline-size;
+}
+.ig-cols {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 128px 80px 44px 44px 40px;
+}
+@container (max-width: 580px) {
+  .ig-cols {
+    gap: 10px;
+    grid-template-columns: minmax(0, 1fr) 24px 66px 36px 36px 34px;
+  }
+  .ig-cols .rank-name {
+    display: none;
+  }
+  .ig-cols .ig-rank-head {
+    visibility: hidden;
+  }
+}
+
+/* Generic row that drops its trailing extras when its container is narrow. */
+.cq {
+  container-type: inline-size;
+}
+@container (max-width: 460px) {
+  .cq-hide-sm {
+    display: none !important;
+  }
+}
+
+/* ---------- Press / hover ---------- */
+.press {
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-quick) var(--ease-out), color var(--dur-quick) var(--ease-out), opacity var(--dur-quick) var(--ease-out);
+}
+.press:active {
+  transform: scale(0.97);
+}
+
+button:focus-visible,
+[tabindex]:focus-visible,
+a:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 2px;
+}
+input:focus-visible,
+select:focus-visible {
+  outline-offset: 0;
+}
+
+/* ---------- Material ---------- */
+/* Used for the few surfaces that float over scrolling content: toolbars, sheets, menus. */
+.material {
+  background: var(--material);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  backdrop-filter: blur(28px) saturate(170%);
+}
+.material-thick {
+  background: rgba(16, 16, 18, 0.86);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  backdrop-filter: blur(40px) saturate(180%);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .material,
+  .material-thick {
+    background: #121214;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Edge effect instead of a hard divider under floating chrome. */
+.edge-fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+}
+
+/* ---------- Skeleton ---------- */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: shimmer 1.6s var(--ease-in-out) infinite;
+}
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ---------- Tooltip ---------- */
+.tip-wrap {
+  position: relative;
+}
+.tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 40;
+  min-width: 168px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 4px) scale(0.98);
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
+}
+.tip-wrap:hover > .tip,
+.tip-wrap:focus-visible > .tip,
+.tip-force > .tip {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+  transition-delay: 120ms;
+}
+
+/* ---------- Ambient ---------- */
+.pulse-dot {
+  animation: pulse 2.4s var(--ease-in-out) infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.radar-sweep {
+  transform-origin: 50% 50%;
+  animation: sweep 3.2s linear infinite;
+}
+@keyframes sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.radar-ping {
+  transform-origin: 50% 50%;
+  animation: ping 3.2s var(--ease-out) infinite;
+}
+@keyframes ping {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* Legacy shape helpers: the angular cut is retired. */
+.cut-br,
+.cut-tl {
+  clip-path: none;
+}
+
+/* ---------- Enter animations (user-initiated surfaces only) ---------- */
+.toast-in {
+  animation: toast-in 280ms var(--ease-out);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+    filter: blur(2px);
+  }
+}
+.sheet-in {
+  animation: sheet-in var(--dur-sheet) var(--ease-drawer);
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+}
+.drawer-in {
+  animation: sheet-in var(--dur-sheet) var(--ease-drawer);
+}
+.scrim-in {
+  animation: scrim-in 220ms var(--ease-out);
+}
+.drawer-scrim {
+  animation: scrim-in 220ms var(--ease-out);
+}
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+.pop-in {
+  animation: pop-in 180ms var(--ease-out);
+  transform-origin: var(--origin, 50% 0);
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* ---------- View transitions ---------- */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+  animation-timing-function: var(--ease-out);
+}
+::view-transition-old(root) {
+  animation-name: vt-out;
+}
+::view-transition-new(root) {
+  animation-name: vt-in;
+}
+@keyframes vt-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes vt-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+    filter: blur(2px);
+  }
+}
+/* Sheet open/close: the page stays put, the sheet and scrim fade, the render travels. */
+[data-vt='sheet']::view-transition-old(root) {
+  animation: none;
+}
+[data-vt='sheet']::view-transition-new(root) {
+  animation: vt-fade 260ms var(--ease-out);
+}
+@keyframes vt-fade {
+  from {
+    opacity: 0;
+  }
+}
+/* The skin render travels from its tile to the detail sheet (and back). */
+::view-transition-group(skin-art) {
+  animation-duration: 460ms;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+::view-transition-image-pair(skin-art) {
+  isolation: auto;
+}
+::view-transition-old(skin-art),
+::view-transition-new(skin-art) {
+  animation: none;
+  mix-blend-mode: normal;
+  height: 100%;
+  object-fit: contain;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after,
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  ::view-transition-group(skin-art) {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* ---------- Range (video scrubber, volume) ---------- */
+input[type='range'].scrub {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 20px;
+  cursor: pointer;
+  --p: 0%;
+}
+input[type='range'].scrub::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: linear-gradient(to right, #fff var(--p), rgba(255, 255, 255, 0.28) var(--p));
+  transition: height 120ms var(--ease-out);
+}
+input[type='range'].scrub:hover::-webkit-slider-runnable-track {
+  height: 6px;
+}
+input[type='range'].scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 0;
+  height: 0;
+}
+input[type='range'].scrub:focus-visible {
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+/* ---------- Form fields: one shape everywhere (pill, soft fill, no border) ---------- */
+@layer components {
+  .field {
+    height: 36px;
+    border-radius: 9999px;
+    background-color: rgba(255, 255, 255, 0.08);
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #f5f5f7;
+    border: 0;
+    outline: none;
+    transition: background-color 160ms var(--ease-out);
+  }
+  .field:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+  }
+  .field:focus-visible {
+    background-color: rgba(255, 255, 255, 0.14);
+    outline: 2px solid rgba(255, 255, 255, 0.9);
+    outline-offset: 0;
+  }
+  .field:disabled {
+    opacity: 0.5;
+  }
+  select.field {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 34px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='%23a1a1a6'%3E%3Cpath d='M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 13px;
+  }
+  input[type='date'].field::-webkit-calendar-picker-indicator {
+    filter: invert(1) opacity(0.55);
+    cursor: pointer;
+  }
+  .field-area {
+    border-radius: 18px;
+    background-color: rgba(255, 255, 255, 0.08);
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #f5f5f7;
+    border: 0;
+    outline: none;
+  }
+  .field-area:focus-visible {
+    background-color: rgba(255, 255, 255, 0.12);
+    outline: 2px solid rgba(255, 255, 255, 0.9);
+  }
+}
