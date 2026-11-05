@@ -20,9 +20,20 @@ export interface Connection {
   mock: boolean;
   lastPollAt?: number;
   backoffMs?: number;
+  /** Riot Client local WebSocket (instant phase changes). Polling continues either way. */
+  events?: 'connected' | 'connecting' | 'off';
 }
 
-export type Phase = 'idle' | 'pregame' | 'ingame';
+/** queue = your party is matchmaking (party State MATCHMAKING). */
+export type Phase = 'idle' | 'queue' | 'pregame' | 'ingame';
+
+export interface QueueView {
+  queueId: string;
+  queueTag: string;
+  queueName: string;
+  /** When matchmaking started (party QueueEntryTime), ms. */
+  enteredAt?: number;
+}
 
 export interface AgentInfo {
   id: string;
@@ -77,6 +88,36 @@ export interface Last5State {
   error?: string;
 }
 
+/** SexyVal's own score (shared/score.ts), 0-1000. Not Tracker Score. */
+export interface SvScore {
+  score: number;
+  /** Matches with round data that went into it. */
+  sample: number;
+  parts: {
+    acs: number;
+    kd: number;
+    adr: number;
+    hsPct: number;
+    fbPerRound: number;
+    wins: number;
+    losses: number;
+  };
+}
+
+export interface RankWithRR {
+  /** Undefined = no rank this act (Unrated). */
+  rank?: RankInfo;
+  rr: number;
+}
+
+export interface MmrState {
+  status: 'loading' | 'done' | 'error';
+  current?: RankWithRR;
+  /** Highest tier across every act, and the act it was reached in. */
+  peak?: { rank?: RankInfo; act?: string };
+  error?: string;
+}
+
 export interface PlayerRow {
   puuid: string;
   name?: string;
@@ -89,6 +130,10 @@ export interface PlayerRow {
   rank?: RankInfo;
   accountLevel?: number;
   last5: Last5State;
+  /** Undefined for hidden players (never computed); null when fewer than 3 matches have round data. */
+  svScore?: SvScore | null;
+  /** Current + peak rank from mmr/v1. Undefined for hidden players (never fetched). */
+  mmr?: MmrState;
 }
 
 /** Starting side from the hardcoded rule (shared/side.ts). `side` is null when the mode has none. */
@@ -128,6 +173,7 @@ export interface CoreGameView {
 export interface AppState {
   conn: Connection;
   phase: Phase;
+  queue?: QueueView;
   pregame?: PregameView;
   coregame?: CoreGameView;
   me?: PlayerRow;
@@ -163,6 +209,8 @@ export interface ShopView {
 }
 
 export interface Settings {
+  /** Bumped whenever a one-time settings migration runs; absent/stale on disk means "run the pending migrations". */
+  settingsVersion: number;
   launchAtStartup: boolean;
   closeToTray: boolean;
   pollMs: number;
@@ -184,7 +232,17 @@ export interface Settings {
   overlayScale: OverlayScale;
   /** Electron display id; null = primary display. */
   overlayDisplay: number | null;
+  /** Overlay pops up with "Match found" the moment the queue pops. */
+  overlayMatchFound: boolean;
+  /** HenrikDev API key (price source). The renderer only ever gets a masked copy; never logged. */
+  henrikKey: string;
+  /** Live player rows: auto = compact when narrow or 10 players in game. */
+  liveDensity: LiveDensity;
+  /** Silent background updates (installed build only; the portable build can't self-update). */
+  autoUpdate: boolean;
 }
+
+export type LiveDensity = 'auto' | 'compact' | 'detailed';
 
 export type OverlayPosition = 'top-center' | 'top-left' | 'top-right';
 export type OverlayScale = 'small' | 'medium';
@@ -193,6 +251,18 @@ export interface DebugDump {
   raw: Record<string, { at: number; data: unknown }>;
   unknownKeys: Record<string, string[]>;
   logs: string[];
+}
+
+export interface UpdateStatus {
+  state: 'idle' | 'checking' | 'up-to-date' | 'downloading' | 'downloaded' | 'error';
+  currentVersion: string;
+  availableVersion?: string;
+  progressPercent?: number;
+  error?: string;
+  lastCheckedAt?: number;
+  /** The portable build can't self-update; Settings shows a plain link instead. */
+  portable: boolean;
+  releasesUrl: string;
 }
 
 export interface Toast {

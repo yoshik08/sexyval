@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import type { Catalog, OwnedState, PriceMap, PriceQuote } from '../../../shared/features';
 import type { Settings } from '../../../shared/types';
 import { api } from './api';
+import { isVideoPlaying, onPlaybackChange } from './media';
 
 /** Tiny external store: one value, many subscribers. */
 function createStore<T>(initial: T) {
@@ -36,7 +37,7 @@ export function startStores(): void {
   started = true;
   void api.rpc<Catalog>('catalog:get').then(catalogStore.set);
   void api.rpc<OwnedState>('owned:get').then(ownedStore.set);
-  // Every catalog skin has a quote (exact / contract reward / typical), so this never needs a login.
+  // Every catalog skin has a quote (exact price / contract reward / reason there is none), so this never needs a login.
   void api.rpc<PriceMap>('prices:get').then(pricesStore.set);
   void api.rpc<string[]>('wishlist:get').then(wishlistStore.set);
   void api.getSettings().then(settingsStore.set);
@@ -55,6 +56,14 @@ export const usePrices = () => useStore(pricesStore);
 export const useQuote = (skinId?: string): PriceQuote | undefined => usePrices()[skinId ?? ''];
 export const useWishlist = () => useStore(wishlistStore);
 export const useSettings = () => useStore(settingsStore);
+
+/** Any <video> currently claimed for playback, across the whole app. */
+export const useVideoPlaying = () => useSyncExternalStore(onPlaybackChange, isVideoPlaying);
+
+const loadoutDirtyStore = createStore(false);
+/** Unmounting Loadout already discards its draft, so this is only ever true while that screen is up. */
+export const useLoadoutDirty = () => useStore(loadoutDirtyStore);
+export const setLoadoutDirty = loadoutDirtyStore.set;
 
 export async function toggleWish(skinId: string): Promise<void> {
   const next = await api.rpc<string[]>('wishlist:toggle', skinId);

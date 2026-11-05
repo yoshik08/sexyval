@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
-import { startMockServer, type MockHandle } from '../mock/server';
+import { MOCK_HENRIK_KEY, startMockServer, type MockHandle } from '../mock/server';
+import { RiotEvents } from '../main/riot/events';
+import { httpRequest } from '../main/riot/http';
+import { parsePartyCore } from '../shared/party';
+import { parseOffers } from '../shared/offers';
 import { RiotSession, WaitingError, type ConnectionCache } from '../main/riot/session';
 import { ITEM_TYPES, RiotApi } from '../main/riot/api';
 import { parseOwnedItems } from '../shared/collection';
@@ -172,5 +176,82 @@ describe('mock Riot server end to end', () => {
     expect(signed.regionSource).toBe('riot-geo');
     const w = await new RiotApi(signed, () => undefined).wallet(ME);
     expect(w.status).toBe(200);
+  });
+});
+
+describe('mock: queue phase, Riot Client events, HenrikDev offers', () => {
+  let mock: MockHandle;
+  let session: RiotSession;
+  let api: RiotApi;
+  beforeAll(async () => {
+    mock = await startMockServer({ quiet: true, lockDir: path.join(os.tmpdir(), `sexyval-test-q-${process.pid}`), henrik: 'offers' });
+    mock.setPhase('idle');
+    session = new RiotSession({ lockfilePath: mock.lockfilePath, shooterLogPath: path.join(os.tmpdir(), 'sexyval-no-log'), overrideGlz: `${mock.base}/glz`, overridePd: `${mock.base}/pd`, overrideShared: `${mock.base}/shared`, loadCache: async () => ({}) });
+    api = new RiotApi(session, () => undefined);
+    await session.ensure();
+  });
+  afterAll(() => mock.close());
+
+  it('queue = party MATCHMAKING with a real QueueEntryTime; idle is DEFAULT', async () => {
+    const id = (await api.partyPlayer()).json.CurrentPartyID;
+    expect(parsePartyCore((await api.party(id)).json)).toMatchObject({ matchmaking: false, queueEntryAt: undefined });
+    mock.setPhase('queue', 30_000);
+    const q = parsePartyCore((await api.party(id)).json);
+    expect(q.matchmaking).toBe(true);
+    expect(Date.now() - q.queueEntryAt!).toBeGreaterThanOrEqual(29_000);
+    expect((await api.pregamePlayer(ME)).status).toBe(404);
+    mock.setPhase('pregame', 0);
+    const pm = await api.pregameMatch((await api.pregamePlayer(ME)).json.MatchID);
+    expect(pm.json.MapID).toBe(''); // the map arrives a moment into agent select
+    mock.setPhase('idle');
+  });
+
+  it('pushes party / pregame / core-game events over the local WebSocket to RiotEvents', async () => {
+    const uris: string[] = [];
+    const ev = new RiotEvents(() => session.lockInfo, (u) => uris.push(u));
+    ev.start();
+    const until = async (f: () => boolean) => {
+      for (let i = 0; i < 100 && !f(); i++) await new Promise((r) => setTimeout(r, 30));
+    };
+    await until(() => ev.state === 'connected' && mock.events.subscribers() > 0);
+    expect(ev.state).toBe('connected');
+    mock.setPhase('queue');
+    mock.setPhase('pregame');
+    mock.setPhase('ingame');
+    await until(() => uris.length >= 3);
+    ev.stop();
+    expect(uris.some((u) => u.includes('ares-parties'))).toBe(true);
+    expect(uris.some((u) => u.includes('ares-pregame'))).toBe(true);
+    expect(uris.some((u) => u.includes('ares-core-game'))).toBe(true);
+    mock.setPhase('idle');
+  });
+
+  it('rejects a WebSocket without the right Basic password', async () => {
+    const bad = new RiotEvents(() => ({ ...session.lockInfo!, password: 'wrong' }), () => undefined);
+    bad.start();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(bad.state).not.toBe('connected');
+    bad.stop();
+  });
+
+  it('HenrikDev: 401 for a bad key, offers for a good one (v1 and v2 shapes)', async () => {
+    const url = (v: string) => `${mock.base}/henrik/valorant/${v}/store-offers`;
+    const bad = await httpRequest(url('v1'), { headers: { Authorization: 'HDEV-wrong' } });
+    expect(bad.status).toBe(401);
+    expect(bad.json.errors[0].message).toBe('Unauthorized');
+    expect((await httpRequest(url('v1'))).status).toBe(401);
+    for (const v of ['v1', 'v2']) {
+      const r = await httpRequest(url(v), { headers: { Authorization: MOCK_HENRIK_KEY } });
+      expect(r.status).toBe(200);
+      expect(Object.keys(parseOffers(r.json)!.levels).length).toBeGreaterThan(1000);
+    }
+  });
+
+  it('HenrikDev: production today answers 404 RiotImplementationRemoved', async () => {
+    const removed = await startMockServer({ quiet: true, lockDir: path.join(os.tmpdir(), `sexyval-test-r-${process.pid}`) });
+    const r = await httpRequest(`${removed.base}/henrik/valorant/v1/store-offers`, { headers: { Authorization: MOCK_HENRIK_KEY } });
+    expect(r.status).toBe(404);
+    expect(r.text).toContain('RiotImplementationRemoved');
+    await removed.close();
   });
 });

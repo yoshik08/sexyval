@@ -186,7 +186,7 @@ function Browser({ kind }: { kind: 'agents' | 'maps' | 'weapons' }) {
               {item.stats ? (
                 <>
                   <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-3 text-sm">
-                    {[['Cost', item.cost ?? '–'], ['Fire rate', item.stats.fireRate], ['Magazine', item.stats.magazine], ['Reload', `${item.stats.reload}s`]].map(([k, v]) => (
+                    {[...(item.cost != null ? [['Cost', item.cost]] : []), ['Fire rate', item.stats.fireRate], ['Magazine', item.stats.magazine], ['Reload', `${item.stats.reload}s`]].map(([k, v]) => (
                       <div key={k as string} className="rounded-sm border border-line px-3 py-2">
                         <div className="label">{k}</div>
                         <div className="num mt-1">{v}</div>

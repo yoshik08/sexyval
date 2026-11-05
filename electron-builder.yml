@@ -1,6 +1,12 @@
 appId: com.sexyval.app
 productName: SexyVal
 copyright: Personal use only. Not affiliated with Riot Games.
+# Releases must be public: electron-updater's GitHub provider fetches latest.yml anonymously, with
+# no token baked into the app. The CI workflow (.github/workflows/release.yml) publishes these.
+publish:
+  provider: github
+  owner: yoshik08
+  repo: sexyval
 directories:
   output: release
   buildResources: build

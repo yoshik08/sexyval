@@ -152,7 +152,24 @@ function Body({ skin, ctx }: { skin: CatalogSkin; ctx?: SkinContext }) {
     if (art.current) art.current.style.transform = '';
   }, []);
 
-  const caption = quote?.kind === 'typical' ? `Estimated from the standard ${tier?.name ?? ''} price. Once this skin appears in your store, the exact price is saved here.` : quote?.kind === 'reward' ? 'This one is earned, not bought.' : quote?.kind === 'exact' ? 'Price as shown in your store.' : '';
+  const caption =
+    quote?.kind === 'reward'
+      ? 'This one is earned, not bought.'
+      : quote?.kind === 'exact'
+        ? quote.source === 'offers'
+          ? 'Price from the store offers list.'
+          : quote.source === 'list'
+            ? `From the Valorant wiki price list (${new Date(quote.seenAt ?? 0).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}). Your store's price replaces it when the skin shows up there.`
+            : 'Price as shown in your store.'
+        : quote?.kind === 'approx'
+          ? quote.basis === 'collection'
+            ? 'Approximate: newer than the price list, so this is what the rest of its collection costs. The real price replaces it when the skin appears in your store.'
+            : `Approximate: newer than the price list, so this is the usual ${tier?.name ?? ''} price. The real price replaces it when the skin appears in your store.`
+        : quote?.kind === 'none'
+          ? quote.reason === 'not-sold'
+            ? 'Not in the store offers list: it comes in a bundle or is not sold on its own.'
+            : 'No exact price yet. Once this skin appears in your store, its price is saved here.'
+          : '';
   return (
     <>
       {/* stage */}

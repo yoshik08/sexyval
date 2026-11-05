@@ -185,7 +185,7 @@ select option {
   }
 }
 
-/* In-game team table: full columns when there is room; compact (rank icon only, tighter stats) when not. */
+/* In-game player line: player | current + peak rank icons | SV Score | last-5 pips. */
 .ig-team {
   container-type: inline-size;
 }
@@ -193,18 +193,22 @@ select option {
   display: grid;
   align-items: center;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) 128px 80px 44px 44px 40px;
+  grid-template-columns: minmax(0, 1fr) 60px 40px 80px;
 }
-@container (max-width: 580px) {
+/* Last column (pips) sits at the right edge: open its tooltips leftwards so they never widen the page. */
+.ig-cols > :last-child .tip {
+  left: auto;
+  right: -6px;
+  transform: translate(0, 4px) scale(0.98);
+}
+.ig-cols > :last-child .tip-wrap:hover > .tip,
+.ig-cols > :last-child .tip-wrap:focus-visible > .tip {
+  transform: none;
+}
+@container (max-width: 460px) {
   .ig-cols {
-    gap: 10px;
-    grid-template-columns: minmax(0, 1fr) 24px 66px 36px 36px 34px;
-  }
-  .ig-cols .rank-name {
-    display: none;
-  }
-  .ig-cols .ig-rank-head {
-    visibility: hidden;
+    gap: 9px;
+    grid-template-columns: minmax(0, 1fr) 56px 36px 66px;
   }
 }
 

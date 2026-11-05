@@ -4,7 +4,7 @@ import { chromaOwned, isSkinOwned, levelOwned, tierRank } from '../../../shared/
 import { cx } from '../lib/format';
 import { img } from '../lib/media';
 import { ArrowClockwise, Check, FloppyDisk, Play, Trash } from '../lib/icons';
-import { ownedSets, useCatalog, useOwned } from '../lib/store';
+import { ownedSets, setLoadoutDirty, useCatalog, useOwned } from '../lib/store';
 import { Img, Panel, Select, Skeleton, Toggle, tint } from '../components/ui';
 import { act, Btn, ErrorNote, Note, PageHeader, useRpc } from '../components/kit';
 import { openSkin } from '../components/SkinDetail';
@@ -64,6 +64,10 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
 
   const serverReady = server?.status === 'ready' ? server : null;
   const changes = changeCount(draft, serverReady);
+  useEffect(() => {
+    setLoadoutDirty(changes > 0);
+    return () => setLoadoutDirty(false);
+  }, [changes]);
   const gunOf = (wid: string) => draft?.guns.find((g) => g.weaponId === wid);
   const setGun = (wid: string, patch: Partial<LoadoutGun>) => setDraft((d) => (d ? { ...d, guns: d.guns.map((g) => (g.weaponId === wid ? { ...g, ...patch } : g)) } : d));
 

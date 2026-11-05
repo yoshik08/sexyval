@@ -43,17 +43,27 @@ export function tint(hex: string | undefined, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
-/** Price, estimate or acquisition: a quote always has a number or a reason, so nothing is ever "unknown". */
+/** Known price, approximation (≈, muted), contract source, or the reason there is no price. */
 export function PriceTag({ quote, className, size = 'md' }: { quote?: PriceQuote; className?: string; size?: 'sm' | 'md' | 'lg' }) {
   const d = describeQuote(quote);
   const num = size === 'lg' ? 'text-xl' : size === 'md' ? 'text-md' : 'text-sm';
   const title =
-    quote?.kind === 'typical'
-      ? 'Estimated from the standard price of this tier. The exact price appears once the skin shows up in your store.'
-      : quote?.kind === 'reward'
-        ? 'A contract reward: it is earned, not bought.'
-        : quote?.kind === 'exact'
-          ? 'Price seen in your store'
+    quote?.kind === 'reward'
+      ? 'A contract reward: it is earned, not bought.'
+      : quote?.kind === 'exact'
+        ? quote.source === 'offers'
+          ? 'Price from the store offers list (HenrikDev)'
+          : quote.source === 'list'
+            ? 'Price from the Valorant wiki price list bundled with SexyVal'
+            : 'Price as shown in your store'
+        : quote?.kind === 'approx'
+          ? quote.basis === 'collection'
+            ? 'Approximate: what the other skins in this collection cost. Updates when it appears in your store.'
+            : 'Approximate: the usual price for this edition. Updates when it appears in your store.'
+        : quote?.kind === 'none'
+          ? quote.reason === 'not-sold'
+            ? 'Not in the store offers list: sold only in a bundle, or not sold at all.'
+            : 'No price source has this skin yet. It appears once the skin shows up in your store.'
           : undefined;
   if (quote?.kind === 'reward') {
     // Tiles are narrow: say the type ("Battle Pass"); the sheet spells out which pass.
@@ -63,8 +73,15 @@ export function PriceTag({ quote, className, size = 'md' }: { quote?: PriceQuote
       </span>
     );
   }
+  if (quote?.kind !== 'exact' && quote?.kind !== 'approx') {
+    return (
+      <span title={d.primary === d.short ? title : `${d.primary}. ${title ?? ''}`} className={cx('whitespace-nowrap text-sm font-medium text-muted', className)}>
+        {size === 'sm' ? (d.short ?? d.primary) : d.primary}
+      </span>
+    );
+  }
   return (
-    <span title={title} className={cx('inline-flex items-baseline gap-1 whitespace-nowrap', d.estimate ? 'text-muted' : 'text-ink', className)}>
+    <span title={title} className={cx('inline-flex items-baseline gap-1 whitespace-nowrap', quote?.kind === 'approx' ? 'text-muted' : 'text-ink', className)}>
       <span className={cx('t-num', num)}>{d.primary}</span>
       {d.secondary && <span className="text-2xs font-semibold text-faint">{d.secondary}</span>}
     </span>

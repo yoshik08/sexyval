@@ -1,7 +1,7 @@
 {
   "name": "sexyval",
   "productName": "SexyVal",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "SexyVal",
   "main": "dist-electron/main/main.js",
   "author": "yoshik",
@@ -16,6 +16,7 @@
     "mock:server": "npm run build:main && node dist-electron/mock/standalone.js",
     "screenshots": "npm run build && node scripts/run-electron.mjs MOCK=1 SEXYVAL_SCREENSHOTS=screenshots",
     "icon": "node scripts/make-icon.mjs",
+    "mock:update": "node scripts/mock-update-server.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
@@ -23,6 +24,7 @@
     "dist": "npm run icon && npm run build && electron-builder --win"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "undici": "^6.21.0"
   },
   "devDependencies": {

@@ -1,10 +1,12 @@
-const SECRET_KEY = /(token|authorization|password|passwd|secret|jwt|cookie|entitlement|credential|key$)/i;
+const SECRET_KEY = /(token|authorization|password|passwd|secret|jwt|cookie|entitlement|credential|henrik|api_?key|key$)/i;
 const JWT = /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g;
 const BEARER = /(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 const ARG_SECRET = /(-[a-z-]*(?:token|auth|password)[a-z-]*=)[^\s"]+/gi;
+/** HenrikDev API keys (HDEV-xxxxxxxx-...). */
+const HDEV_KEY = /HDEV-[A-Za-z0-9-]{6,}/g;
 
 export function redactString(s: string): string {
-  return s.replace(JWT, '[REDACTED_JWT]').replace(BEARER, '$1 [REDACTED]').replace(ARG_SECRET, '$1[REDACTED]');
+  return s.replace(JWT, '[REDACTED_JWT]').replace(BEARER, '$1 [REDACTED]').replace(ARG_SECRET, '$1[REDACTED]').replace(HDEV_KEY, '[REDACTED_KEY]');
 }
 
 /** Deep copy with secret-looking keys and token-like strings removed. */

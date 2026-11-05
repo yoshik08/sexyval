@@ -45,23 +45,39 @@ export interface CatalogSkin {
 }
 
 /**
- * What the UI shows instead of "price unknown".
- * exact   - seen in the live store (daily / night market / bundle); VP is the list price.
- * reward  - not sold; it is a contract reward, `label` says which.
- * typical - the standard price for this tier and weapon kind, shown as an estimate.
+ * A skin's price, or the reason there is none.
+ * exact  - VP is the list price; `source` says where it came from: your store (daily / night market /
+ *          bundle), the HenrikDev store offers, or the bundled wiki price list.
+ * reward - not sold; it is a contract reward, `label` says which.
+ * approx - newer skin missing from every list: `basis` says whether VP is its collection's price or its
+ *          edition's usual price. Replaced as soon as the skin appears in your store.
+ * none   - no price: `reason` is not-sold (a full offers list lacks it) or unavailable (no source has it).
  */
 export interface PriceQuote {
-  kind: 'exact' | 'reward' | 'typical';
+  kind: 'exact' | 'reward' | 'approx' | 'none';
+  basis?: 'collection' | 'tier';
   vp?: number;
   /** Full text for a reward, e.g. "Battle Pass · Season 2026 Act III". */
   label?: string;
-  /** Which contract type a reward comes from. */
-  source?: SkinSource['kind'];
+  /** exact: 'store' or 'offers'; reward: which contract type. */
+  source?: 'store' | 'offers' | 'list' | SkinSource['kind'];
+  reason?: 'not-sold' | 'unavailable';
   seenAt?: number;
 }
 
 /** Skin id -> quote. Every catalog skin has an entry. */
 export type PriceMap = Record<string, PriceQuote>;
+
+/** HenrikDev store-offers source, for Settings. */
+export interface OffersStatus {
+  state: 'no-key' | 'loading' | 'ok' | 'bad-key' | 'removed' | 'rate-limited' | 'error';
+  message?: string;
+  fetchedAt?: number;
+  /** Offers in the cache. */
+  count?: number;
+  api?: 'v1' | 'v2';
+  coverage?: { total: number; priced: number; missing: number };
+}
 
 export type ExtraKind = 'buddy' | 'spray' | 'card' | 'title';
 

@@ -19,12 +19,25 @@ export function video(url?: string | null, opts: { preview?: boolean } = {}): st
 
 /** Only one video plays at a time across the app. */
 let current: HTMLVideoElement | null = null;
+const playbackSubs = new Set<() => void>();
+/** Conservative on purpose (claimed, not necessarily mid-frame): the auto-updater treats "maybe playing" as "don't interrupt". */
+export function isVideoPlaying(): boolean {
+  return current !== null;
+}
+export function onPlaybackChange(fn: () => void): () => void {
+  playbackSubs.add(fn);
+  return () => playbackSubs.delete(fn);
+}
 export function claimPlayback(el: HTMLVideoElement): void {
   if (current && current !== el) current.pause();
   current = el;
+  playbackSubs.forEach((s) => s());
 }
 export function releasePlayback(el: HTMLVideoElement): void {
-  if (current === el) current = null;
+  if (current === el) {
+    current = null;
+    playbackSubs.forEach((s) => s());
+  }
 }
 
 /** Stops a <video> and drops its connection. Pausing alone leaves the download running. */

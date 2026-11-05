@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import type { AppState, CoreGameView, PlayerRow, PregameView } from '../../../shared/types';
-import { cx, kd, useNow } from '../lib/format';
+import type { AppState, CoreGameView, LiveDensity, PlayerRow, PregameView, QueueView } from '../../../shared/types';
+import { clock, cx, kd, useNow } from '../lib/format';
 import { ArrowRight, Lock } from '../lib/icons';
 import { lockIn, staggerIn } from '../lib/motion';
+import { saveSettings, useSettings } from '../lib/store';
 import { Btn } from '../components/kit';
-import { Img, Last5Pips, Panel, RankBadge, SectionTitle, SideBadge, Skeleton, SummaryStats, tint } from '../components/ui';
+import { Img, Last5Pips, Panel, SectionTitle, Segmented, SideBadge, Skeleton, tint } from '../components/ui';
+import { ExpandPanel, isHidden, PlayerDetail, RankPair, rowHandlers, ScoreBadge, useDensity, useExpansion } from '../components/players';
 
 export function LiveScreen({ state, onLoadout }: { state: AppState | null; onLoadout: () => void }) {
   if (!state) return <Waiting message="Starting…" />;
@@ -15,6 +17,43 @@ export function LiveScreen({ state, onLoadout }: { state: AppState | null; onLoa
   if (phase === 'pregame' && state.pregame) return <AgentSelect v={state.pregame} onLoadout={onLoadout} />;
   if (phase === 'ingame' && state.coregame) return <InGame v={state.coregame} />;
   return <Idle state={state} />;
+}
+
+/** Compact / Detailed (and Auto) for the player rows, remembered in settings. */
+function DensityToggle() {
+  const s = useSettings();
+  return (
+    <Segmented<LiveDensity>
+      size="sm"
+      value={s?.liveDensity ?? 'auto'}
+      options={[
+        ['auto', 'Auto'],
+        ['compact', 'Compact'],
+        ['detailed', 'Detailed'],
+      ]}
+      onChange={(v) => void saveSettings({ liveDensity: v })}
+    />
+  );
+}
+
+function QueueBanner({ q }: { q: QueueView }) {
+  const now = useNow(1000);
+  const secs = q.enteredAt ? Math.max(0, (now - q.enteredAt) / 1000) : null;
+  return (
+    <Panel className="mb-6 flex items-center justify-between gap-6 px-6 py-5">
+      <div className="flex min-w-0 items-center gap-3.5">
+        <span className="pulse-dot h-2.5 w-2.5 shrink-0 rounded-full bg-win" />
+        <div className="min-w-0">
+          <div className="t-head text-lg text-ink">In queue · {q.queueName}</div>
+          <div className="text-pretty mt-0.5 text-sm text-muted">Agent select opens here the moment a match is found.</div>
+        </div>
+      </div>
+      <div className="shrink-0 text-right">
+        <div data-queue-time className="t-num text-[40px] leading-none text-ink">{secs != null ? clock(secs) : '--'}</div>
+        <div className="mt-1.5 text-xs text-muted">in queue</div>
+      </div>
+    </Panel>
+  );
 }
 
 function Waiting({ message }: { message: string }) {
@@ -54,8 +93,9 @@ function Idle({ state }: { state: AppState }) {
           {me?.name ?? <Skeleton className="h-9 w-48" />}
           {me?.tag && <span className="ml-2 text-faint">#{me.tag}</span>}
         </h1>
-        <p className="max-w-xs text-right text-sm text-muted">You are in the menus. Agent select and live matches show up here on their own.</p>
+        <p className="max-w-xs text-right text-sm text-muted">{state.phase === 'queue' ? 'Searching for a match.' : 'You are in the menus. Agent select and live matches show up here on their own.'}</p>
       </div>
+      {state.phase === 'queue' && state.queue && <QueueBanner q={state.queue} />}
       <div className="grid grid-cols-[minmax(0,1fr)_clamp(260px,26vw,340px)] items-start gap-5 xl:gap-6">
         <Panel>
           <div className="flex items-center justify-between px-6 pb-2 pt-5">
@@ -121,7 +161,7 @@ function PhaseTimer({ endsAt }: { endsAt?: number }) {
   return <span className={cx('t-num text-[56px] leading-none', secs <= 10 ? 'text-warn' : 'text-ink')}>{secs}</span>;
 }
 
-function AllyCard({ p }: { p: PlayerRow }) {
+function AllyCard({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<typeof useExpansion> }) {
   const ref = useRef<HTMLDivElement>(null);
   const prev = useRef(p.selectionState);
   useEffect(() => {
@@ -130,9 +170,19 @@ function AllyCard({ p }: { p: PlayerRow }) {
   }, [p.selectionState]);
   const locked = p.selectionState === 'locked';
   const picking = p.selectionState === 'selected';
-  const hidden = p.incognito && !p.isMe;
+  const hidden = isHidden(p);
   return (
-    <div ref={ref} data-row className={cx('relative flex flex-col overflow-hidden rounded-[26px] bg-surface ring-1 ring-inset transition-shadow duration-[420ms] ease-out', locked ? 'ring-def/45' : 'ring-white/[0.07]', p.isMe && 'shadow-[0_0_0_1px_rgba(255,255,255,0.28)]')}>
+    <div
+      ref={ref}
+      data-row
+      {...rowHandlers(p.puuid, open, x, !hidden)}
+      className={cx(
+        'relative flex flex-col overflow-hidden rounded-[26px] bg-surface ring-1 ring-inset transition-shadow duration-[420ms] ease-out',
+        locked ? 'ring-def/45' : 'ring-white/[0.07]',
+        p.isMe && 'shadow-[0_0_0_1px_rgba(255,255,255,0.28)]',
+        !hidden && 'cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-white/60',
+      )}
+    >
       <div className="relative h-[208px] overflow-hidden" style={{ background: locked ? `radial-gradient(ellipse 80% 70% at 50% 85%, ${tint('#5ad8c6', 0.22)}, transparent 70%)` : 'linear-gradient(to bottom, rgba(255,255,255,0.04), transparent)' }}>
         {p.agent?.portrait ? (
           <Img src={p.agent.portrait} alt={p.agent.name} className={cx('absolute left-1/2 top-2 h-[310px] max-w-none -translate-x-1/2 object-cover object-top transition-[filter,opacity] duration-[420ms]', !locked && 'opacity-60 saturate-50')} />
@@ -150,17 +200,23 @@ function AllyCard({ p }: { p: PlayerRow }) {
       <div className="flex flex-1 flex-col gap-2.5 px-4 pb-4">
         <div className="min-w-0">
           <div className="t-head truncate text-[19px]">{p.agent?.name ?? '—'}</div>
-          <div className="truncate text-sm text-muted">{hidden ? <span className="italic text-faint">Incognito</span> : p.name ? <>{p.name}<span className="text-faint">#{p.tag}</span></> : <Skeleton className="mt-1 h-3.5 w-24" />}</div>
+          <div className="truncate text-sm text-muted" title={!hidden && p.name ? `${p.name}#${p.tag}` : undefined}>
+            {hidden ? <span className="italic text-faint">Hidden</span> : p.name ? <>{p.name}<span className="text-faint">#{p.tag}</span></> : <Skeleton className="mt-1 h-3.5 w-24" />}
+          </div>
+          {hidden && p.accountLevel != null && <div className="text-xs text-faint">Level {p.accountLevel}</div>}
         </div>
-        <RankBadge rank={p.rank} />
-        <div className="mt-auto flex items-center justify-between gap-2 border-t border-white/[0.07] pt-3">
+        <div className="mt-auto flex flex-col gap-2.5 border-t border-white/[0.07] pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <RankPair p={p} open={open} />
+            <ScoreBadge p={p} />
+          </div>
           <Last5Pips last5={p.last5} size="sm" />
-          {p.last5.summary && (
-            <span className="num whitespace-nowrap text-xs text-muted">
-              {p.last5.summary.wins}-{p.last5.summary.losses} · {p.last5.summary.acs}
-            </span>
-          )}
         </div>
+        {!hidden && (
+          <ExpandPanel open={open}>
+            <PlayerDetail p={p} narrow />
+          </ExpandPanel>
+        )}
       </div>
     </div>
   );
@@ -168,9 +224,13 @@ function AllyCard({ p }: { p: PlayerRow }) {
 
 function AgentSelect({ v, onLoadout }: { v: PregameView; onLoadout: () => void }) {
   const grid = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const s = useSettings();
+  const density = useDensity(s?.liveDensity ?? 'auto', root, v.allies.length, false);
+  const x = useExpansion(density);
   useLayoutEffect(() => staggerIn(grid.current), [v.matchId]);
   return (
-    <div className="flex min-h-full flex-col">
+    <div ref={root} className="flex min-h-full flex-col">
       <div className="relative h-[232px] shrink-0 overflow-hidden">
         <Img src={v.map?.splash} alt={v.map?.name ?? ''} className="absolute inset-0 h-full w-full object-cover" />
         <div className="absolute inset-0 bg-gradient-to-r from-black via-black/80 to-black/20" />
@@ -201,10 +261,10 @@ function AgentSelect({ v, onLoadout }: { v: PregameView; onLoadout: () => void }
       </div>
 
       <div className="px-6 xl:px-10 pb-10 pt-7">
-        <SectionTitle>Your team</SectionTitle>
-        <div ref={grid} className="grid grid-cols-5 gap-3 xl:gap-4">
+        <SectionTitle right={<DensityToggle />}>Your team</SectionTitle>
+        <div ref={grid} className="grid grid-cols-5 items-start gap-3 xl:gap-4">
           {v.allies.map((p) => (
-            <AllyCard key={p.puuid} p={p} />
+            <AllyCard key={p.puuid} p={p} open={!isHidden(p) && x.isOpen(p.puuid)} x={x} />
           ))}
         </div>
 
@@ -240,63 +300,80 @@ function Chip({ children, strong }: { children: React.ReactNode; strong?: boolea
 
 const COLS = 'ig-cols';
 
-function PlayerLine({ p }: { p: PlayerRow }) {
-  const hidden = p.incognito && !p.isMe;
+/** Compact line: agent, name#tag, current + peak rank, SV Score, last-5 pips. Everything else is in tooltips or the expanded panel. */
+function PlayerLine({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<typeof useExpansion> }) {
+  const hidden = isHidden(p);
   return (
-    <div data-row className={cx(COLS, 'px-4 py-2', p.isMe && 'bg-white/[0.05]')}>
-      <div className="flex min-w-0 items-center gap-3">
-        <Img src={p.agent?.icon} alt={p.agent?.name ?? ''} className="h-9 w-9 shrink-0 rounded-xl bg-white/5" fallback={<div className="h-9 w-9 shrink-0 rounded-xl bg-white/5" />} />
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-            <span className="min-w-0 truncate">
-              {hidden ? (
-                <span className="italic text-faint">Incognito</span>
-              ) : p.name ? (
-                <>
-                  {p.name}
-                  <span className="text-faint">#{p.tag}</span>
-                </>
-              ) : (
-                <Skeleton className="h-3.5 w-28" />
-              )}
-            </span>
-            {p.isMe && <span className="shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-2xs font-semibold text-ink">You</span>}
+    <div
+      data-row
+      {...rowHandlers(p.puuid, open, x, !hidden)}
+      className={cx('mx-2 rounded-2xl px-2.5 py-2 outline-none transition-colors duration-160', p.isMe && 'bg-white/[0.05]', !hidden && 'cursor-pointer hover:bg-white/[0.03] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/50', open && !p.isMe && 'bg-white/[0.03]')}
+    >
+      <div className={COLS}>
+        <div className="flex min-w-0 items-center gap-3">
+          <Img src={p.agent?.icon} alt={p.agent?.name ?? ''} className="h-9 w-9 shrink-0 rounded-xl bg-white/5" fallback={<div className="h-9 w-9 shrink-0 rounded-xl bg-white/5" />} />
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+              <span className="min-w-0 truncate" title={!hidden && p.name ? `${p.name}#${p.tag}` : undefined}>
+                {hidden ? (
+                  <span className="italic text-faint">Hidden</span>
+                ) : p.name ? (
+                  <>
+                    {p.name}
+                    <span className="text-faint">#{p.tag}</span>
+                  </>
+                ) : (
+                  <Skeleton className="h-3.5 w-28" />
+                )}
+              </span>
+              {p.isMe && <span className="shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-2xs font-semibold text-ink">You</span>}
+            </div>
+            <div className="truncate text-xs text-muted">
+              {p.agent?.name ?? '—'}
+              {p.accountLevel != null && <span className="text-faint"> · Lv {p.accountLevel}</span>}
+            </div>
           </div>
-          <div className="truncate text-xs text-muted">{p.agent?.name ?? '—'}</div>
         </div>
+        <RankPair p={p} open={open} />
+        <ScoreBadge p={p} className="justify-self-end" />
+        <Last5Pips last5={p.last5} />
       </div>
-      <RankBadge rank={p.rank} />
-      <Last5Pips last5={p.last5} />
-      <SummaryStats last5={p.last5} />
+      {!hidden && (
+        <ExpandPanel open={open}>
+          <PlayerDetail p={p} />
+        </ExpandPanel>
+      )}
     </div>
   );
 }
 
-function TeamColumn({ title, rows, tone }: { title: string; rows: PlayerRow[]; tone: 'ally' | 'enemy' }) {
+function TeamColumn({ title, rows, tone, density }: { title: string; rows: PlayerRow[]; tone: 'ally' | 'enemy'; density: 'compact' | 'detailed' }) {
+  const x = useExpansion(density);
   return (
     <Panel className="ig-team overflow-visible">
       <div className="flex items-center gap-2.5 px-5 pb-2 pt-5">
         <span className={cx('h-2.5 w-2.5 rounded-full', tone === 'ally' ? 'bg-def' : 'bg-atk')} />
         <h2 className="t-head text-md">{title}</h2>
       </div>
-      <div className={cx(COLS, 'px-4 py-1.5 text-xs text-faint')}>
+      <div className={cx(COLS, 'mx-2 px-2.5 py-1.5 text-xs text-faint')}>
         <span>Player</span>
-        <span className="ig-rank-head">Rank</span>
+        <span title="Current rank · peak">Rank</span>
+        <span className="text-right">SV</span>
         <span>Last 5</span>
-        <span className="text-right">W-L</span>
-        <span className="text-right">K/D</span>
-        <span className="text-right">ACS</span>
       </div>
-      <div className="pb-2">{rows.length ? rows.map((p) => <PlayerLine key={p.puuid} p={p} />) : <div className="px-5 py-6 text-sm text-muted">No players reported.</div>}</div>
+      <div className="pb-2">{rows.length ? rows.map((p) => <PlayerLine key={p.puuid} p={p} open={!isHidden(p) && x.isOpen(p.puuid)} x={x} />) : <div className="px-5 py-6 text-sm text-muted">No players reported.</div>}</div>
     </Panel>
   );
 }
 
 function InGame({ v }: { v: CoreGameView }) {
   const wrap = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const s = useSettings();
+  const density = useDensity(s?.liveDensity ?? 'auto', root, v.myTeam.length + v.enemyTeam.length, true);
   useLayoutEffect(() => staggerIn(wrap.current), [v.matchId]);
   return (
-    <div className="flex min-h-full flex-col">
+    <div ref={root} className="flex min-h-full flex-col">
       <div className="relative h-[120px] shrink-0 overflow-hidden">
         <Img src={v.map?.splash} alt="" className="absolute inset-0 h-full w-full object-cover opacity-60" />
         <div className="absolute inset-0 bg-gradient-to-r from-black via-black/85 to-black/30" />
@@ -310,11 +387,15 @@ function InGame({ v }: { v: CoreGameView }) {
           </div>
         </div>
       </div>
-      <div ref={wrap} className="grid grid-cols-2 gap-4 px-6 py-6 xl:gap-5 xl:px-8">
-        <TeamColumn title="Your team" rows={v.myTeam} tone="ally" />
-        <TeamColumn title="Enemy team" rows={v.enemyTeam} tone="enemy" />
+      <div className="flex items-center justify-between gap-4 px-6 pt-5 xl:px-8">
+        <p className="text-xs text-faint">Click a player for ranks, SV Score and their last five matches. Hidden players are not looked up.</p>
+        <DensityToggle />
       </div>
-      <p className="px-6 xl:px-10 pb-8 text-xs text-faint">Hover a pip for the map, K/D/A, ACS and score. Incognito players are not looked up.</p>
+      <div ref={wrap} className="grid grid-cols-2 items-start gap-4 px-6 py-5 xl:gap-5 xl:px-8">
+        <TeamColumn title="Your team" rows={v.myTeam} tone="ally" density={density} />
+        <TeamColumn title="Enemy team" rows={v.enemyTeam} tone="enemy" density={density} />
+      </div>
+      <p className="px-6 xl:px-10 pb-8 text-xs text-faint">SV Score is SexyVal’s own 0–1000 rating from the last five matches (ACS, K/D, ADR, HS%, first bloods, wins). It is not Tracker Score.</p>
     </div>
   );
 }

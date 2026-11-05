@@ -154,6 +154,11 @@ export interface RawMatchSummary {
   queueId?: string;
   queueTag: string;
   score: string;
+  /** For SV Score (shared/score.ts). adr/firstBloods are null when the match has no round data. */
+  rounds?: number;
+  adr?: number | null;
+  hsPct?: number | null;
+  firstBloods?: number | null;
 }
 
 /** Extracts one player's line from a match. Returns null if they aren't in it. */
@@ -184,6 +189,10 @@ export function summarizeMatch(d: TrimmedDetails, puuid: string): RawMatchSummar
     queueId: d.queueId,
     queueTag: queueTag(d.queueId),
     score,
+    rounds: p.roundsPlayed,
+    adr: p.adr ?? null,
+    hsPct: p.hsPct ?? null,
+    firstBloods: p.firstBloods ?? null,
   };
 }
 

@@ -1,5 +1,7 @@
-import type { AppState, CoreGameView, Phase, PlayerRow, PregameView } from '../shared/types';
-import { modeName, queueTag } from '../shared/queues';
+import type { AppState, CoreGameView, MmrState, Phase, PlayerRow, PregameView, QueueView } from '../shared/types';
+import { modeName, queueName, queueTag } from '../shared/queues';
+import { nextDelay, phaseFrom, phaseLabel, WAIT_MS } from '../shared/phase';
+import { parsePartyCore } from '../shared/party';
 import { getStartSide, isStartSideVerified } from '../shared/side';
 import { HttpError } from './riot/http';
 import { RiotSession, WaitingError } from './riot/session';
@@ -20,12 +22,17 @@ export interface LoopDeps {
   toast: (level: 'info' | 'warn' | 'error', msg: string) => void;
   mock: boolean;
   pollMs: () => number;
+  /** Current + peak rank per player. Never called for hidden players. */
+  mmr: { ensure(puuid: string): void; get(puuid: string): MmrState | undefined };
+  /** Riot Client WebSocket state, shown in the connection info. */
+  eventsState?: () => 'connected' | 'connecting' | 'off';
   /** Tokens available for a (new) account: owned items, etc. */
   onAccount?: (puuid: string) => void;
   onNoTokens?: () => void;
 }
 
-const WAIT_MS = 3000;
+/** Coalesces bursts of WebSocket events into one tick. */
+const NUDGE_MS = 120;
 
 interface PlayerInput {
   puuid: string;
@@ -52,7 +59,15 @@ export class GameLoop {
   private emitTimer: NodeJS.Timeout | null = null;
   private rawPregame: { json: any; at: number } | null = null;
   private rawCore: any = null;
+  private rawParty: any = null;
+  /** CurrentPartyID, re-fetched only when the party call answers 404. */
+  private partyId: string | null = null;
+  private lastMapId = '';
+  private emitNow = false;
+  private again = false;
+  private nudgeTimer: NodeJS.Timeout | null = null;
   private backoff = 0;
+  private backoffUntil = 0;
   private lastPuuid: string | null = null;
   private running = false;
   private ticking = false;
@@ -77,15 +92,37 @@ export class GameLoop {
     if (this.timer) clearTimeout(this.timer);
   }
 
-  /** Force an immediate tick (used by mock controls/screenshots). */
+  /** Force an immediate tick (mock controls, screenshots, account changes). */
   pollNow(): void {
-    this.schedule(0);
+    if (this.ticking) this.again = true;
+    else this.schedule(0);
+  }
+
+  /**
+   * Tick soon because the Riot Client reported a party/pregame/core-game event. Bursts collapse into
+   * one tick, and an active 429/5xx backoff is respected (the event is dropped; polling resumes after it).
+   */
+  nudge(): void {
+    if (Date.now() < this.backoffUntil || this.nudgeTimer) return;
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = null;
+      if (Date.now() < this.backoffUntil) return;
+      this.pollNow();
+    }, NUDGE_MS);
   }
 
   private schedule(ms: number): void {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => void this.tick(), ms);
+  }
+
+  /** Rebuild and push right away (phase changed, or the map just became known). */
+  private flushEmit(): void {
+    if (this.emitTimer) clearTimeout(this.emitTimer);
+    this.emitTimer = null;
+    this.rebuild();
+    this.d.emit(this.state);
   }
 
   /** Rebuild views from the last raw JSON and push to renderer (debounced). */
@@ -98,7 +135,8 @@ export class GameLoop {
     }, 80);
   }
 
-  private async tick(): Promise<void> {
+  /** One poll. Public for tests; normally driven by schedule(). */
+  async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
     let next = this.d.pollMs();
@@ -113,14 +151,17 @@ export class GameLoop {
       } else {
         this.rawPregame = null;
         this.rawCore = null;
-        next = Math.max(next, WAIT_MS);
+        this.rawParty = null;
+        this.partyId = null;
       }
       this.setPhase(phase);
       this.backoff = 0;
+      this.backoffUntil = 0;
+      next = nextDelay({ phase, pollMs: this.d.pollMs(), valorantRunning: this.d.session.valorantRunning, backoffMs: 0 });
       this.state.conn = {
         ...this.connBase(),
         status: 'connected',
-        message: !this.d.session.valorantRunning ? 'Valorant closed' : phase === 'idle' ? 'In menus' : phase === 'pregame' ? 'Agent select' : 'In game',
+        message: phaseLabel(phase, this.d.session.valorantRunning),
         lastPollAt: Date.now(),
       };
     } catch (e) {
@@ -134,17 +175,25 @@ export class GameLoop {
         const status = e instanceof HttpError ? e.status : 0;
         const transient = status === 429 || status >= 500 || status === 0;
         this.backoff = transient ? Math.min(60_000, Math.max(10_000, this.backoff * 2)) : 15_000;
+        this.backoffUntil = Date.now() + this.backoff;
         const msg = e instanceof HttpError ? `Riot API ${e.status} on ${e.path}` : `Error: ${(e as Error).message}`;
         log.error('loop tick failed', msg);
         this.d.toast(status === 429 ? 'warn' : 'error', `${msg}, retrying in ${Math.round(this.backoff / 1000)}s`);
         this.state.conn = { ...this.connBase(), status: 'error', message: msg, backoffMs: this.backoff };
-        next = this.backoff;
+        // Backoff wins over every cadence, including the 1 s queue/agent-select one.
+        next = nextDelay({ phase: this.state.phase, pollMs: this.d.pollMs(), valorantRunning: true, backoffMs: this.backoff });
       }
     } finally {
       this.ticking = false;
     }
     this.state.assetsReady = this.d.assets.ready;
-    this.requestEmit();
+    if (this.emitNow) {
+      this.emitNow = false;
+      this.flushEmit();
+    } else this.requestEmit();
+    // A forced poll arrived mid-tick: run again now, unless we are backing off.
+    if (this.again && Date.now() >= this.backoffUntil) next = 0;
+    this.again = false;
     this.schedule(next);
   }
 
@@ -162,6 +211,7 @@ export class GameLoop {
       version: s.version ?? undefined,
       versionSource: s.versionSource ?? undefined,
       puuid: s.puuid ?? undefined,
+      events: this.d.eventsState?.(),
     };
   }
 
@@ -180,36 +230,67 @@ export class GameLoop {
     this.lastPuuid = null;
     this.rawPregame = null;
     this.rawCore = null;
+    this.rawParty = null;
+    this.partyId = null;
     this.state.phase = 'idle';
     this.d.shop.stop();
   }
 
   private async pollPhase(me: string): Promise<Phase> {
+    let pregameMatch: any = null;
+    let coreMatch: any = null;
+    let party: any = null;
     const pp = await this.d.api.pregamePlayer(me);
     const preId = pp.status === 200 ? str(pp.json?.MatchID) : '';
     if (preId) {
       const pm = await this.d.api.pregameMatch(preId);
-      if (pm.status === 200 && pm.json) {
-        this.rawPregame = { json: pm.json, at: Date.now() };
-        this.rawCore = null;
-        this.afterPregame(me, pm.json);
-        return 'pregame';
+      if (pm.status === 200 && pm.json) pregameMatch = pm.json;
+    }
+    if (!pregameMatch) {
+      const cp = await this.d.api.coreGamePlayer(me);
+      const coreId = cp.status === 200 ? str(cp.json?.MatchID) : '';
+      if (coreId) {
+        const cm = await this.d.api.coreGameMatch(coreId);
+        if (cm.status === 200 && cm.json) coreMatch = cm.json;
       }
     }
-    this.rawPregame = null;
-    const cp = await this.d.api.coreGamePlayer(me);
-    const coreId = cp.status === 200 ? str(cp.json?.MatchID) : '';
-    if (coreId) {
-      const cm = await this.d.api.coreGameMatch(coreId);
-      if (cm.status === 200 && cm.json) {
-        this.rawCore = cm.json;
-        this.afterCore(me, cm.json);
-        return 'ingame';
-      }
+    if (!pregameMatch && !coreMatch) party = await this.fetchParty();
+    const phase = phaseFrom({ pregameMatch, coreMatch, party });
+
+    this.rawPregame = pregameMatch ? { json: pregameMatch, at: Date.now() } : null;
+    this.rawCore = coreMatch;
+    this.rawParty = party;
+    if (pregameMatch) {
+      // The map is the first thing people look for: push it the moment it appears, no debounce.
+      const mapId = str(pregameMatch.MapID);
+      if (mapId && !this.lastMapId) this.emitNow = true;
+      this.lastMapId = mapId;
+      this.afterPregame(me, pregameMatch);
+    } else {
+      this.lastMapId = '';
     }
-    this.rawCore = null;
-    this.d.history.ensure(me);
-    return 'idle';
+    if (coreMatch) this.afterCore(me, coreMatch);
+    if (phase === 'idle' || phase === 'queue') this.d.history.ensure(me);
+    return phase;
+  }
+
+  /** Party JSON, or null when there is none. CurrentPartyID is cached and re-fetched only after a 404. */
+  private async fetchParty(): Promise<any | null> {
+    const lookupId = async () => {
+      const pp = await this.d.api.partyPlayer();
+      this.partyId = pp.status === 200 ? str(pp.json?.CurrentPartyID) || null : null;
+      return this.partyId;
+    };
+    let id = this.partyId ?? (await lookupId());
+    if (!id) return null;
+    let p = await this.d.api.party(id);
+    if (p.status === 404) {
+      // Party changed (joined someone, left, game restarted): ask once for the new id.
+      id = await lookupId();
+      if (!id) return null;
+      p = await this.d.api.party(id);
+    }
+    return p.status === 200 && p.json ? p.json : null;
   }
 
   private setPhase(phase: Phase): void {
@@ -217,6 +298,7 @@ export class GameLoop {
     if (prev === phase) return;
     log.info(`phase ${prev} -> ${phase}`);
     this.state.phase = phase;
+    this.emitNow = true;
     if (phase === 'idle' && prev === 'ingame') {
       const me = this.d.session.puuid;
       if (me) {
@@ -237,7 +319,10 @@ export class GameLoop {
   private lookup(me: string, players: { puuid: string; incognito: boolean }[]): void {
     const allowed = players.filter((p) => p.puuid && (!p.incognito || p.puuid === me)).map((p) => p.puuid);
     this.d.names.request(allowed);
-    for (const p of allowed) this.d.history.ensure(p);
+    for (const p of allowed) {
+      this.d.history.ensure(p);
+      this.d.mmr.ensure(p);
+    }
   }
 
   private afterPregame(me: string, json: any): void {
@@ -276,6 +361,9 @@ export class GameLoop {
       rank: this.d.assets.rank(p.tier),
       accountLevel: p.level,
       last5: hidden ? { status: 'skipped', matches: [] } : this.d.history.get(p.puuid),
+      // Hidden players: no score and no MMR, not even a cache read.
+      svScore: hidden ? undefined : this.d.history.score(p.puuid),
+      mmr: hidden ? undefined : (this.d.mmr.get(p.puuid) ?? { status: 'loading' }),
     };
   }
 
@@ -284,7 +372,19 @@ export class GameLoop {
     this.state.updatedAt = Date.now();
     this.state.pregame = this.state.phase === 'pregame' && this.rawPregame ? this.buildPregame(me, this.rawPregame.json, this.rawPregame.at) : undefined;
     this.state.coregame = this.state.phase === 'ingame' && this.rawCore ? this.buildCore(me, this.rawCore) : undefined;
+    this.state.queue = this.state.phase === 'queue' && this.rawParty ? this.buildQueue(this.rawParty) : undefined;
     this.state.me = me ? this.row(me, { puuid: me, teamId: '', incognito: false }) : undefined;
+  }
+
+  private buildQueue(json: any): QueueView {
+    const core = parsePartyCore(json);
+    return { queueId: core.queueId ?? '', queueTag: queueTag(core.queueId ?? ''), queueName: queueName(core.queueId) || 'Custom', enteredAt: core.queueEntryAt };
+  }
+
+  /** Rebuilds and returns the current state (tests). */
+  snapshot(): AppState {
+    this.rebuild();
+    return this.state;
   }
 
   private buildPregame(me: string, json: any, at: number): PregameView {

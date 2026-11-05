@@ -1,9 +1,11 @@
 import { app } from 'electron';
 import type { Settings } from '../shared/types';
 import { dataDir, readJson, writeJson } from './paths';
+import { CURRENT_SETTINGS_VERSION, loginItemOutOfSync, migrateStartupDefault } from '../shared/settingsMigration';
 
 const DEFAULTS: Settings = {
-  launchAtStartup: false,
+  settingsVersion: CURRENT_SETTINGS_VERSION,
+  launchAtStartup: true,
   closeToTray: true,
   pollMs: 5000,
   historyQueue: '',
@@ -19,12 +21,20 @@ const DEFAULTS: Settings = {
   overlayPosition: 'top-center',
   overlayScale: 'medium',
   overlayDisplay: null,
+  overlayMatchFound: true,
+  henrikKey: '',
+  liveDensity: 'auto',
+  autoUpdate: true,
 };
+
+/** Shown instead of the key: the renderer only learns that one is set (and its last 4 characters). */
+export const KEY_MASK = '••••';
 
 const ICONS = ['red', 'teal', 'gold', 'mono'] as const;
 const PLATFORMS = ['PC', 'xbox', 'playstation'] as const;
 const OVERLAY_POSITIONS = ['top-center', 'top-left', 'top-right'] as const;
 const OVERLAY_SCALES = ['small', 'medium'] as const;
+const DENSITIES = ['auto', 'compact', 'detailed'] as const;
 
 let current: Settings = DEFAULTS;
 let saveTimer: NodeJS.Timeout | null = null;
@@ -34,12 +44,31 @@ const file = () => dataDir('settings.json');
 
 export async function loadSettings(): Promise<Settings> {
   const s = await readJson<Partial<Settings>>(file(), {});
-  current = { ...DEFAULTS, ...s, window: { ...DEFAULTS.window, ...(s.window ?? {}) } };
+  const migration = migrateStartupDefault(s);
+  current = { ...DEFAULTS, ...s, settingsVersion: migration.settingsVersion, launchAtStartup: migration.launchAtStartup, window: { ...DEFAULTS.window, ...(s.window ?? {}) } };
+  if (app.isPackaged) {
+    if (migration.shouldRegister) app.setLoginItemSettings({ openAtLogin: current.launchAtStartup, args: ['--hidden'] });
+    else syncLoginItem();
+  }
+  if (migration.shouldRegister) void writeJson(file(), current);
   return current;
+}
+
+/** A moved install folder or an auto-update path change can leave Windows' login item disabled without telling us; resync it every start. */
+function syncLoginItem(): void {
+  const got = app.getLoginItemSettings({ args: ['--hidden'] });
+  if (loginItemOutOfSync(got.openAtLogin, current.launchAtStartup)) {
+    app.setLoginItemSettings({ openAtLogin: current.launchAtStartup, args: ['--hidden'] });
+  }
 }
 
 export function getSettings(): Settings {
   return current;
+}
+
+/** What the renderer gets: the HenrikDev key is masked. */
+export function publicSettings(s: Settings = current): Settings {
+  return { ...s, henrikKey: s.henrikKey ? KEY_MASK + s.henrikKey.slice(-4) : '' };
 }
 
 export function onSettings(fn: (s: Settings, prev: Settings) => void): void {
@@ -66,6 +95,11 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   if (OVERLAY_POSITIONS.includes(patch.overlayPosition as any)) next.overlayPosition = patch.overlayPosition!;
   if (OVERLAY_SCALES.includes(patch.overlayScale as any)) next.overlayScale = patch.overlayScale!;
   if (patch.overlayDisplay === null || (typeof patch.overlayDisplay === 'number' && Number.isSafeInteger(patch.overlayDisplay))) next.overlayDisplay = patch.overlayDisplay;
+  if (typeof patch.overlayMatchFound === 'boolean') next.overlayMatchFound = patch.overlayMatchFound;
+  if (DENSITIES.includes(patch.liveDensity as any)) next.liveDensity = patch.liveDensity!;
+  if (typeof patch.autoUpdate === 'boolean') next.autoUpdate = patch.autoUpdate;
+  // The masked value comes back unchanged from the form; only a real edit replaces the key.
+  if (typeof patch.henrikKey === 'string' && patch.henrikKey.length <= 200 && !patch.henrikKey.startsWith(KEY_MASK)) next.henrikKey = patch.henrikKey.trim();
   if (next.launchAtStartup !== current.launchAtStartup && app.isPackaged) {
     app.setLoginItemSettings({ openAtLogin: next.launchAtStartup, args: ['--hidden'] }); // started by Windows: begin in the tray
   }

@@ -94,4 +94,5 @@ export {
   ArrowsClockwiseIcon as ArrowsClockwise,
   ArrowUUpLeftIcon as ArrowUUpLeft,
   ArrowRightIcon as ArrowRight,
+  ArrowSquareOutIcon as ArrowSquareOut,
 } from '@phosphor-icons/react';

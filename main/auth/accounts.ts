@@ -140,6 +140,8 @@ export class AccountManager implements SignInProvider {
       title: 'Sign in with Riot',
       autoHideMenuBar: true,
       backgroundColor: '#0b0e13',
+      // Capture runs must never take focus (the game may be running); the mock login needs no window.
+      show: !(process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS),
       webPreferences: { partition: this.partition(id), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     const pending = this.capture(win, null);

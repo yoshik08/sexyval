@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AppState, DebugDump, Settings } from '../../../shared/types';
-import type { AccountInfo } from '../../../shared/features';
+import type { AppState, DebugDump, Settings, UpdateStatus } from '../../../shared/types';
+import type { AccountInfo, OffersStatus } from '../../../shared/features';
 import { api } from '../lib/api';
 import { ago, cx, fmtBytes } from '../lib/format';
 import { saveSettings, useSettings } from '../lib/store';
 import { Panel, Segmented, Select, Toggle } from '../components/ui';
+import { WarningCircle } from '../lib/icons';
 import { Bar, Btn, Note, PageHeader } from '../components/kit';
 
 type Tab = 'general' | 'accounts' | 'debug';
@@ -74,15 +75,67 @@ const CACHE_SIZES: { value: string; label: string }[] = [
   { value: '20480', label: '20 GB' },
 ];
 
+const UPDATE_LABEL: Record<UpdateStatus['state'], string> = {
+  idle: 'Not checked yet',
+  checking: 'Checking…',
+  'up-to-date': "You're on the latest version",
+  downloading: 'Downloading update…',
+  downloaded: 'Update ready — installing at the next quiet moment',
+  error: 'Update check failed',
+};
+
+function Updates({ s, set }: { s: Settings; set: (patch: Partial<Settings>) => void }) {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  useEffect(() => {
+    void api.rpc<UpdateStatus>('update:status').then(setStatus);
+    return api.on<UpdateStatus>('update', setStatus);
+  }, []);
+  if (!status) return null;
+  if (status.portable) {
+    return (
+      <Group title="Updates">
+        <Info k="Version" v={status.currentVersion} />
+        <Row title="Portable build" hint="This build can't update itself.">
+          <Btn size="sm" tone="ghost" onClick={() => void api.rpc('update:openReleases')}>
+            New version on GitHub
+          </Btn>
+        </Row>
+      </Group>
+    );
+  }
+  return (
+    <Group title="Updates">
+      <Toggle checked={s.autoUpdate} onChange={(v) => set({ autoUpdate: v })} label="Install updates automatically" hint="Downloads in the background and installs itself the next time you're away, with no prompts." />
+      <Row
+        title="Version"
+        hint={
+          <>
+            {status.currentVersion}
+            {status.availableVersion && status.availableVersion !== status.currentVersion ? ` → ${status.availableVersion}` : ''} · {UPDATE_LABEL[status.state]}
+            {status.state === 'downloading' && status.progressPercent != null ? ` (${status.progressPercent}%)` : ''}
+            {status.lastCheckedAt ? ` · checked ${ago(status.lastCheckedAt)}` : ''}
+          </>
+        }
+      >
+        <Btn size="sm" tone="ghost" disabled={status.state === 'checking' || status.state === 'downloading'} onClick={() => void api.rpc('update:check')}>
+          Check now
+        </Btn>
+      </Row>
+    </Group>
+  );
+}
+
 function General({ state }: { state: AppState | null }) {
   const s = useSettings();
   const [mock, setMock] = useState(false);
   const [cache, setCache] = useState<{ bytes: number; files: number } | null>(null);
   const refreshCache = () => void api.rpc<{ bytes: number; files: number }>('videos:info').then(setCache);
   const [displays, setDisplays] = useState<{ id: number; label: string }[]>([]);
+  const [displayMode, setDisplayMode] = useState<string | null>(null);
   useEffect(() => {
     void api.isMock().then(setMock);
     void api.rpc<{ id: number; label: string }[]>('overlay:displays').then(setDisplays);
+    void api.rpc<string | null>('overlay:displayMode').then(setDisplayMode);
     refreshCache();
   }, []);
   const set = (patch: Partial<Settings>) => void saveSettings(patch);
@@ -97,13 +150,24 @@ function General({ state }: { state: AppState | null }) {
         <Toggle checked={s.notifications} onChange={(v) => set({ notifications: v })} label="Windows notifications" hint="A skin on your watchlist shows up in your store, or a session expires." />
       </Group>
 
-      <Group title="Agent select overlay" note="A small always-on-top window, nothing more: no injection, no memory reading, no screen capture. It never takes focus and clicks pass through it. It shows only your starting side, only during agent select.">
+      <Updates s={s} set={set} />
+
+      <Group title="Agent select overlay" note="A small always-on-top window, nothing more: no injection, no memory reading, no screen capture. It never takes focus and clicks pass through it. It shows only the map and your starting side, only during agent select.">
+        {displayMode === 'fullscreen' && s.overlayEnabled && (
+          <div data-fullscreen-note className="flex items-start gap-2.5 py-3.5 text-sm">
+            <WarningCircle size={18} weight="fill" className="mt-0.5 shrink-0 text-warn" />
+            <span className="text-ink/90">
+              Valorant is in Fullscreen. Switch Display Mode to <span className="text-ink">Windowed Fullscreen</span> to see the overlay.
+            </span>
+          </div>
+        )}
         <Toggle
           checked={s.overlayEnabled}
           onChange={(v) => set({ overlayEnabled: v })}
-          label="Show ATK/DEF over the game"
+          label="Show map and side over the game"
           hint="Works with Valorant in Windowed or Windowed Fullscreen. Windows can’t draw anything over exclusive Fullscreen."
         />
+        <Toggle checked={s.overlayMatchFound} onChange={(v) => set({ overlayMatchFound: v })} label="Match found" hint="Pop up the moment your queue finds a match, before the map is known." />
         <Row title="Position">
           <Select
             value={s.overlayPosition}
@@ -161,7 +225,7 @@ function General({ state }: { state: AppState | null }) {
       </Group>
 
       <Group title="Live and history">
-        <Row title="Live poll rate" hint="How often agent select and matches are checked.">
+        <Row title="Live poll rate" hint="How often the menus and running matches are checked. Queue and agent select are checked every second.">
           <Select value={String(s.pollMs)} onChange={(v) => set({ pollMs: Number(v) })} options={[3000, 5000, 8000, 12000].map((v) => ({ value: String(v), label: `Every ${v / 1000} seconds` }))} align="right" width={190} />
         </Row>
         <Row title="History queue" hint="Which queue match history shows by default.">
@@ -203,6 +267,7 @@ function General({ state }: { state: AppState | null }) {
       <Group title="Riot connection">
         <Info k="Riot Client" v={c?.riotClient === 'up' ? 'Running' : 'Not running'} />
         <Info k="Valorant" v={c?.valorant ? 'Running' : 'Closed'} />
+        <Info k="Instant updates" v={c?.events === 'connected' ? 'Connected' : c?.events === 'connecting' ? 'Connecting…' : 'Off (polling)'} />
         <Info k="Token source" v={c?.tokenSource === 'riot-client' ? 'Riot Client' : c?.tokenSource === 'signin' ? `Signed in (${c.account ?? '?'})` : 'None'} />
         <Info k="Region" v={c?.region ? `${c.region} / ${c.shard}` : undefined} />
         <Info k="Game version" v={c?.version} />
@@ -212,7 +277,7 @@ function General({ state }: { state: AppState | null }) {
       {mock && (
         <Group title="Mock mode" note="You are running against the built-in fake Riot server. Pick a scenario to drive it.">
           <div className="flex flex-wrap gap-2 py-4">
-            {(['auto', 'offline', 'noval', 'idle', 'pregame', 'ingame'] as const).map((p) => (
+            {(['auto', 'offline', 'noval', 'idle', 'queue', 'pregame', 'ingame'] as const).map((p) => (
               <Btn key={p} size="sm" onClick={() => void api.mockSetPhase(p)}>
                 {p === 'noval' ? 'Valorant closed' : p === 'offline' ? 'Client closed' : p}
               </Btn>
@@ -222,7 +287,7 @@ function General({ state }: { state: AppState | null }) {
       )}
 
       <p className="text-pretty col-span-2 max-w-3xl px-1 text-xs text-faint">
-        Personal, unofficial tool. Not affiliated with Riot Games. The only overlay is the optional agent-select ATK/DEF pill (a plain always-on-top window). No agent locking, no gameplay automation: party, queue and loadout changes only happen when you press a button. Tokens stay in memory in the main process.
+        Personal, unofficial tool. Not affiliated with Riot Games. The only overlay is the optional agent-select pill with the map and your starting side (a plain always-on-top window). No agent locking, no gameplay automation: party, queue and loadout changes only happen when you press a button. Tokens stay in memory in the main process.
       </p>
     </div>
   );
@@ -257,6 +322,7 @@ function Accounts({ state }: { state: AppState | null }) {
           </Btn>
         </Row>
       </Group>
+      <PriceSource />
       <section>
         <h2 className="t-head mb-3 px-1 text-md">Signed-in accounts</h2>
         <Panel className="divide-y divide-white/[0.06]">
@@ -294,6 +360,98 @@ function Accounts({ state }: { state: AppState | null }) {
         <p className="mt-2.5 px-1 text-xs text-faint">Riot Client tokens win while it runs; otherwise the active signed-in account is used. Sessions refresh silently about every 50 minutes.</p>
       </section>
     </div>
+  );
+}
+
+const OFFER_STATE: Record<OffersStatus['state'], string> = {
+  'no-key': 'No key: prices come from your store and the bundled price list.',
+  loading: 'Checking…',
+  ok: 'Connected',
+  'bad-key': 'HenrikDev rejected this key.',
+  removed: 'HenrikDev reports that Riot removed store offers. Prices come from your store and the bundled price list.',
+  'rate-limited': 'Rate limited; SexyVal tries again later.',
+  error: 'Could not reach HenrikDev.',
+};
+
+/** HenrikDev key. The saved key never comes back to this page: only "set, ending in …". */
+function PriceSource() {
+  const s = useSettings();
+  const [draft, setDraft] = useState('');
+  const [status, setStatus] = useState<OffersStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void api.rpc<OffersStatus>('offers:status').then(setStatus);
+  }, [s?.henrikKey]);
+  // A fetch started elsewhere (key saved, game update): follow it until it settles.
+  useEffect(() => {
+    if (status?.state !== 'loading') return;
+    const t = setInterval(() => void api.rpc<OffersStatus>('offers:status').then(setStatus), 800);
+    return () => clearInterval(t);
+  }, [status?.state]);
+  const save = async (key: string) => {
+    setBusy(true);
+    await saveSettings({ henrikKey: key });
+    setDraft('');
+    setStatus(await api.rpc<OffersStatus>('offers:refresh'));
+    setBusy(false);
+  };
+  const has = !!s?.henrikKey;
+  const cov = status?.coverage;
+  return (
+    <Group
+      title="Price source"
+      note={
+        <>
+          Prices come from your own store first, then the HenrikDev store offers list (needs a key; unofficial, third party, free at api.henrikdev.xyz), then the price list bundled with SexyVal. Skins newer than all of these show an approximate price (≈) until they appear in your store. The key is stored in settings.json on this PC, sent only to api.henrikdev.xyz and never logged.
+        </>
+      }
+    >
+      <Row title="HenrikDev API key" hint={has ? `Saved, ending in ${s!.henrikKey.slice(-4)}` : 'Not set'}>
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (draft.trim()) void save(draft.trim());
+          }}
+        >
+          <input
+            data-henrik-key
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={has ? 'Replace key' : 'HDEV-…'}
+            className="field w-[220px]"
+            aria-label="HenrikDev API key"
+          />
+          <Btn type="submit" size="sm" tone="primary" disabled={busy || !draft.trim()}>
+            Save
+          </Btn>
+          {has && (
+            <Btn size="sm" tone="ghost" disabled={busy} onClick={() => void save('')}>
+              Remove
+            </Btn>
+          )}
+        </form>
+      </Row>
+      <Row
+        title="Store offers"
+        hint={
+          <span className={cx(status?.state === 'bad-key' || status?.state === 'error' ? 'text-loss' : status?.state === 'removed' || status?.state === 'rate-limited' ? 'text-warn' : '')}>
+            {status ? OFFER_STATE[status.state] : '…'}
+            {cov ? ` · ${cov.priced.toLocaleString('en-US')} of ${cov.total.toLocaleString('en-US')} store skins priced` : ''}
+            {status?.fetchedAt ? ` · fetched ${ago(status.fetchedAt)}` : ''}
+          </span>
+        }
+      >
+        {has && (
+          <Btn size="sm" disabled={busy || status?.state === 'loading'} onClick={async () => setStatus(await api.rpc<OffersStatus>('offers:refresh'))}>
+            Check now
+          </Btn>
+        )}
+      </Row>
+    </Group>
   );
 }
 

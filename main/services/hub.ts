@@ -29,6 +29,22 @@ export function presenceStatus(p: any): string | undefined {
   return loop || undefined;
 }
 
+/**
+ * Pure: one friend's status from all their chat presences. A friend can have several at once
+ * (Valorant, Riot Client, League); the Valorant one wins. Anything that isn't Valorant only means
+ * "online": the chat service reports Riot Client users under riot_client or even league_of_legends
+ * when they aren't playing anything, so SexyVal never says "Playing …" for those.
+ */
+export function friendPresence(list: any[]): { online: boolean; state?: string; product?: string; status?: string; valorant: any | null } {
+  const live = list.filter((x) => x && x.state !== 'offline');
+  if (!live.length) return { online: false, valorant: null };
+  const val = live.find((x) => x.product === 'valorant');
+  const pick = val ?? live[0];
+  const dec = val ? decodePresence(val.private) : null;
+  const status = dec ? presenceStatus(dec) : val ? 'Online' : pick.state === 'mobile' ? 'On Riot Mobile' : pick.state === 'away' ? 'Away' : 'Online';
+  return { online: true, state: pick.state, product: pick.product, status: status ?? 'Online', valorant: dec };
+}
+
 export class HubService {
   constructor(
     private readonly api: RiotApi,
@@ -45,19 +61,19 @@ export class HubService {
       this.api.local('GET', '/chat/v4/presences', undefined, 'presences'),
       this.api.local('GET', '/chat/v4/friendrequests', undefined, 'friendRequests'),
     ]);
-    const presences = new Map<string, any>();
-    for (const x of Array.isArray(p.json?.presences) ? p.json.presences : []) if (x?.puuid) presences.set(x.puuid, x);
+    const presences = new Map<string, any[]>();
+    for (const x of Array.isArray(p.json?.presences) ? p.json.presences : []) if (x?.puuid) presences.set(x.puuid, [...(presences.get(x.puuid) ?? []), x]);
     const friends: FriendView[] = (Array.isArray(f.json?.friends) ? f.json.friends : []).map((x: any) => {
-      const pr = presences.get(x.puuid);
-      const dec = pr?.product === 'valorant' ? decodePresence(pr.private) : null;
+      const pr = friendPresence(presences.get(x.puuid) ?? []);
+      const dec = pr.valorant;
       return {
         puuid: x.puuid,
         name: x.game_name ?? '',
         tag: x.game_tag ?? '',
-        online: !!pr,
-        state: pr?.state,
-        product: pr?.product,
-        status: dec ? presenceStatus(dec) : pr ? (pr.product === 'valorant' ? 'Online' : `Playing ${pr.product}`) : undefined,
+        online: pr.online,
+        state: pr.state,
+        product: pr.product,
+        status: pr.status,
         partySize: dec?.partySize,
         level: dec?.accountLevel,
         rank: dec?.competitiveTier ? this.assets.rank(dec.competitiveTier) : undefined,

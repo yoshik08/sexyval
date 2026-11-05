@@ -20,6 +20,9 @@ interface Step {
 
 const ESC = `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));`;
 const VIDEO_CHECK = `(() => { const v = document.querySelector('[role=dialog] video'); return v ? { t: Math.round(v.currentTime * 10) / 10, paused: v.paused, ready: v.readyState } : 'no video element'; })()`;
+const setS = (patch: Record<string, unknown>) => `window.sexyval.setSettings(${JSON.stringify(patch)});`;
+/** Types the mock HenrikDev key into Settings → Accounts and presses Save, like a user would. */
+const TYPE_KEY = `(() => { const i = document.querySelector('[data-henrik-key]'); if (!i) return; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'HDEV-mock-0000-key'); i.dispatchEvent(new Event('input', { bubbles: true })); setTimeout(() => i.form.requestSubmit(), 150); })();`;
 const clickTab = (label: string) => `[...document.querySelectorAll('[role=tab]')].find((b) => b.textContent.trim().startsWith(${JSON.stringify(label)}))?.click();`;
 
 const STEPS: Step[] = [
@@ -42,12 +45,21 @@ const STEPS: Step[] = [
   { name: '17-hub-leaderboard', nav: 'hub:leaderboard', wait: 3500 },
   { name: '18-hub-agents', nav: 'hub:agents', wait: 3500 },
   { name: '19-live-idle', phase: 'idle', nav: 'live', wait: 7000 },
+  { name: '19b-live-queue', phase: 'queue', elapsed: 83, nav: 'live', wait: 3500, check: `document.querySelector('[data-queue-time]')?.textContent` },
   { name: '20-party', nav: 'party', wait: 4500 },
+  // Queue pops: the overlay shows "Match found" before the map is known (the mock fills MapID after 1.5 s).
+  { name: '21a-overlay-match-found', phase: 'pregame', elapsed: 0, nav: 'live', wait: 700, overlay: true },
   { name: '21-agent-select', phase: 'pregame', elapsed: 22, nav: 'live', wait: 7000 },
   { name: '21b-agent-select-overlay', wait: 1200, overlay: true },
-  { name: '22-in-game', phase: 'ingame', nav: 'live', wait: 10000 },
-  { name: '23-settings', nav: 'settings:general', wait: 3000 },
+  { name: '21c-agent-select-overlay-small', wait: 1200, overlay: true, js: setS({ overlayScale: 'small' }) },
+  { name: '21d-agent-select-expanded', nav: 'live', wait: 1500, js: `${setS({ overlayScale: 'medium' })} const c = document.querySelectorAll('[data-row][role=button]')[1]; c?.click(); setTimeout(() => c?.scrollIntoView({ block: 'end' }), 450);` },
+  { name: '22-in-game', phase: 'ingame', nav: 'live', wait: 10000, check: `[...document.querySelectorAll('[data-score]')].map((e) => e.textContent.slice(0, 4)).join(' ')` },
+  { name: '22b-in-game-expanded', wait: 1500, js: `document.querySelectorAll('.ig-team [data-row][role=button]')[1]?.click();` },
+  { name: '22c-in-game-detailed', wait: 1800, js: clickTab('Detailed') },
+  { name: '22d-in-game-score-tip', wait: 1200, js: `${clickTab('Compact')} setTimeout(() => document.querySelectorAll('.ig-team [data-score]')[6]?.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })), 500);` },
+  { name: '23-settings', nav: 'settings:general', wait: 3000, js: setS({ liveDensity: 'auto' }), check: `!!document.querySelector('[data-fullscreen-note]')` },
   { name: '24-settings-accounts', nav: 'settings:accounts', wait: 6000, js: `[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sign in with Riot'))?.click();` },
+  { name: '25-settings-price-source', nav: 'settings:accounts', wait: 3000, js: TYPE_KEY },
   { name: '26-debug', nav: 'settings:debug', wait: 2500 },
 ];
 
@@ -90,6 +102,7 @@ export async function runScreenshots(win: BrowserWindow, mock: MockHandle, pollN
       log.warn(`step ${s.name}: overlay not visible`);
       continue;
     }
+    if (s.overlay) log.info(`step ${s.name}: overlay pill = ${JSON.stringify(await target.executeJavaScript('measure()').catch((e) => String(e)))}`);
     const img = await target.capturePage();
     const file = path.join(dir, `${s.name}.png`);
     await fs.writeFile(file, img.toPNG());

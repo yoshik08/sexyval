@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { pickHistoryIds, summarizeMatch, summarizePlayer, trimDetails, type RawMatchSummary, type TrimmedDetails } from '../../shared/last5';
-import type { Last5State, MatchSummary } from '../../shared/types';
+import type { Last5State, MatchSummary, SvScore } from '../../shared/types';
+import { svScore } from '../../shared/score';
 import type { RiotApi } from '../riot/api';
 import type { AssetService } from './assets';
 import { readJson, writeJson } from '../paths';
@@ -40,6 +41,12 @@ export class HistoryService {
       summary: matches.length ? summarizePlayer(matches) : undefined,
       error: e.error,
     };
+  }
+
+  /** SV Score from the cached last 5 (null under 3 matches with round data). Hidden players never get here. */
+  score(puuid: string): SvScore | null {
+    const e = this.entries.get(puuid);
+    return e ? svScore(e.rows) : null;
   }
 
   private resolve(r: RawMatchSummary): MatchSummary {

@@ -1,7 +1,11 @@
 import type { Catalog, PriceMap } from '../../shared/features';
 import type { ShopItem, ShopView } from '../../shared/types';
-import { buildPriceMap, type ObservedPrice } from '../../shared/pricing';
+import { buildPriceMap, NO_OFFERS, type ObservedPrice, type OfferPrices, type PriceList } from '../../shared/pricing';
+import bundledList from '../../shared/data/skin-prices.json';
 import { readJson, writeJson } from '../paths';
+
+/** Prices scraped from the Valorant wiki (scripts/scrape-prices.mjs), shipped with the app. */
+export const BUNDLED_LIST: PriceList = { date: String((bundledList as any).date ?? ''), prices: ((bundledList as any).prices ?? {}) as Record<string, number> };
 
 interface Stored {
   v: 1;
@@ -64,7 +68,7 @@ export class PriceBook {
     await writeJson(this.file, { v: 1, prices: this.observed } satisfies Stored);
   }
 
-  quotes(catalog: Catalog): PriceMap {
-    return buildPriceMap(catalog, this.observed);
+  quotes(catalog: Catalog, offers: OfferPrices = NO_OFFERS, list: PriceList = BUNDLED_LIST): PriceMap {
+    return buildPriceMap(catalog, this.observed, offers, list);
   }
 }

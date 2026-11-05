@@ -109,6 +109,11 @@ export class RiotSession {
     return !!(this.active && this.region && this.shard && this.version);
   }
 
+  /** Lockfile of the running Riot Client (for the local WebSocket), or null. */
+  get lockInfo(): { protocol: string; port: number; password: string } | null {
+    return this.lock ? { protocol: this.lock.protocol, port: this.lock.port, password: this.lock.password } : null;
+  }
+
   get localAvailable(): boolean {
     return this.riotClient === 'up' && !!this.lock;
   }

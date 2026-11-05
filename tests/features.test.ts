@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mergeLoadout, normalizeView, parseLoadout, SPRAY_TYPE } from '../main/services/loadout';
-import { decodePresence, presenceStatus } from '../main/services/hub';
+import { decodePresence, friendPresence, presenceStatus } from '../main/services/hub';
 import { contractProgress, weekliesActiveAt } from '../main/services/progression';
 import { analyzeMatches, filterMatches, peakTier, seasonRank } from '../shared/stats';
 import { trimDetails } from '../shared/last5';
@@ -161,5 +161,23 @@ describe('advanced match stats', () => {
     expect(a).toMatchObject({ adr: 150, hsPct: 50, firstBloods: 2, avgLoadout: 4300, avgSpent: 1450 });
     const noRounds = trimDetails({ players: [{ subject: 'x', teamId: 'Blue', stats: { roundsPlayed: 1 } }] });
     expect(noRounds.players[0]).toMatchObject({ adr: null, hsPct: null });
+  });
+});
+
+describe('friend presence', () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64');
+  it('never says "Playing riot_client" or "Playing league_of_legends"', () => {
+    expect(friendPresence([{ product: 'riot_client', state: 'chat' }])).toMatchObject({ online: true, status: 'Online' });
+    expect(friendPresence([{ product: 'league_of_legends', state: 'chat' }]).status).toBe('Online');
+    expect(friendPresence([{ product: 'league_of_legends', state: 'away' }]).status).toBe('Away');
+    expect(friendPresence([{ product: 'riot_client', state: 'mobile' }]).status).toBe('On Riot Mobile');
+  });
+  it('prefers the Valorant presence when a friend has several', () => {
+    const r = friendPresence([{ product: 'league_of_legends', state: 'chat' }, { product: 'valorant', state: 'chat', private: b64({ sessionLoopState: 'PREGAME' }) }, { product: 'riot_client', state: 'chat' }]);
+    expect(r).toMatchObject({ online: true, product: 'valorant', status: 'Agent select' });
+  });
+  it('treats no presence or an offline one as offline', () => {
+    expect(friendPresence([]).online).toBe(false);
+    expect(friendPresence([{ product: 'riot_client', state: 'offline' }]).online).toBe(false);
   });
 });

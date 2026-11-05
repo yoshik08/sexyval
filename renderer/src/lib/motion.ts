@@ -87,3 +87,29 @@ export function countTo(el: HTMLElement | null, to: number, fmt: (n: number) => 
   const o = { v: from };
   gsap.to(o, { v: to, duration: 0.9, ease: 'expo.out', onUpdate: () => (el.textContent = fmt(o.v)) });
 }
+
+/** Row expand timings (animate / transitions-dev skills: accordion 200-250 ms open, a bit faster to close). */
+export const EXPAND = { open: 0.22, close: 0.17, fadeDelay: 0.06, fadeIn: 0.16, fadeOut: 0.1 } as const;
+
+/**
+ * Measured-height expand/collapse. `outer` clips, `inner` is the content (always mounted, so it can be
+ * measured). Height tweens from wherever it is now, so a toggle mid-animation reverses smoothly, and
+ * rows below slide with it. Ends on `height: auto` so later content changes never get clipped.
+ */
+export function expandTo(outer: HTMLElement | null, inner: HTMLElement | null, open: boolean): void {
+  if (!outer || !inner) return;
+  gsap.killTweensOf([outer, inner]);
+  if (reducedMotion()) {
+    outer.style.height = open ? 'auto' : '0px';
+    inner.style.opacity = open ? '1' : '0';
+    return;
+  }
+  const from = outer.getBoundingClientRect().height;
+  if (open) {
+    gsap.fromTo(outer, { height: from }, { height: inner.offsetHeight, duration: EXPAND.open, ease: EASE_OUT, onComplete: () => void (outer.style.height = 'auto') });
+    gsap.fromTo(inner, { opacity: 0 }, { opacity: 1, duration: EXPAND.fadeIn, delay: EXPAND.fadeDelay, ease: 'power1.out' });
+  } else {
+    gsap.to(inner, { opacity: 0, duration: EXPAND.fadeOut, ease: 'power1.out' });
+    gsap.fromTo(outer, { height: from }, { height: 0, duration: EXPAND.close, ease: EASE_OUT });
+  }
+}

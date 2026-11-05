@@ -8,7 +8,7 @@ function on<T>(channel: string, cb: (v: T) => void): () => void {
   return () => ipcRenderer.removeListener(channel, fn);
 }
 
-const EVENTS = new Set(['state', 'toast', 'nav', 'shop', 'catalog', 'owned', 'prices', 'accounts', 'alert']);
+const EVENTS = new Set(['state', 'toast', 'nav', 'shop', 'catalog', 'owned', 'prices', 'accounts', 'alert', 'resume', 'update']);
 
 const api: SexyValApi = {
   getState: () => ipcRenderer.invoke('state:get'),

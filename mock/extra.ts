@@ -20,8 +20,16 @@ const TYPES: Record<string, string> = {
 const SPRAY_TYPE = 'd5f120f8-ff8c-4aac-92ea-f2b5acbe9475';
 const GONE = { httpStatus: 404, errorCode: 'RESOURCE_NOT_FOUND', message: 'resource not found' };
 
+export type Stress = '' | 'long-names' | 'radiant' | 'unrated' | 'nommr' | 'hidden';
+
 export interface ExtraCtx {
   phase(): string;
+  /** When the current queue started (ms), null when not queuing. */
+  queueSince(): number | null;
+  goto(phase: string): void;
+  emitParty(): void;
+  partyId: string;
+  stress: Stress;
   json(res: http.ServerResponse, status: number, body: unknown, headers?: Record<string, string>): void;
   notFound(res: http.ServerResponse, msg?: string): void;
   readBody(req: http.IncomingMessage): Promise<any>;
@@ -33,7 +41,7 @@ export function createExtra(ctx: ExtraCtx) {
   const friendsList = Array.from({ length: 9 }, (_, i) => uuid(`friend-${i}`));
   let outgoing: { puuid: string; name: string; tag: string }[] = [];
   const buddyInstances = new Map<string, string>(fx.owned.buddies.map((b: any) => [b.level, uuid('inst' + b.level)]));
-  const partyId = uuid('party-me');
+  const partyId = ctx.partyId;
   const party = {
     queue: 'competitive',
     accessibility: 'CLOSED' as 'OPEN' | 'CLOSED',
@@ -119,7 +127,7 @@ export function createExtra(ctx: ExtraCtx) {
       UseBroadcastHUD: false,
       PlatformType: 'PC',
     })),
-    State: party.state,
+    State: ctx.phase() === 'queue' ? 'MATCHMAKING' : party.state,
     PreviousState: 'DEFAULT',
     StateTransitionReason: '',
     Accessibility: party.accessibility,
@@ -127,7 +135,7 @@ export function createExtra(ctx: ExtraCtx) {
     MatchmakingData: { QueueID: party.queue, PreferredGamePods: ['aresriot.aws-euc1-prod.eu-gp-frankfurt-1'], SkillDisparityRRPenalty: 0 },
     Invites: null,
     Requests: party.requests,
-    QueueEntryTime: party.queueEntry,
+    QueueEntryTime: ctx.queueSince() != null ? new Date(ctx.queueSince()!).toISOString() : party.queueEntry,
     ErrorNotification: { ErrorType: '', ErroredPlayers: null },
     RestrictedSeconds: 0,
     EligibleQueues: ['competitive', 'unrated', 'swiftplay', 'spikerush', 'deathmatch', 'hurm', 'ggteam'],
@@ -248,10 +256,14 @@ export function createExtra(ctx: ExtraCtx) {
       return json(res, 200, loadout), true;
     }
     if ((m = /^\/pd\/mmr\/v1\/players\/([^/]+)$/.exec(p))) {
+      if (ctx.stress === 'nommr') return json(res, 503, { httpStatus: 503, errorCode: 'SERVICE_UNAVAILABLE', message: 'mock: mmr down' }), true;
       const r = rng('mmr' + m[1]);
-      const tier = 12 + Math.floor(r() * 10);
+      const tier = ctx.stress === 'radiant' ? 27 : 12 + Math.floor(r() * 10);
+      if (ctx.stress === 'unrated') {
+        return json(res, 200, { Version: 1, Subject: m[1], NewPlayerExperienceFinished: true, QueueSkills: { competitive: { TotalGamesNeededForRating: 5, SeasonalInfoBySeasonID: {} } }, LatestCompetitiveUpdate: null }), true;
+      }
       const seasons = Object.fromEntries(
-        fx.progression.acts.map((a: string, i: number) => [a, { SeasonID: a, NumberOfWins: 20 + i, NumberOfWinsWithPlacements: 25 + i, NumberOfGames: 48, Rank: 0, CapstoneWins: 0, LeaderboardRank: 0, CompetitiveTier: tier - 3 + i, RankedRating: Math.floor(r() * 99), WinsByTier: { [tier - 2 + i]: 4, [tier + 2]: i === 1 ? 1 : 0 }, GamesNeededForRating: 0, TotalWinsNeededForRank: 0 }]),
+        fx.progression.acts.map((a: string, i: number) => [a, { SeasonID: a, NumberOfWins: 20 + i, NumberOfWinsWithPlacements: 25 + i, NumberOfGames: 48, Rank: 0, CapstoneWins: 0, LeaderboardRank: 0, CompetitiveTier: ctx.stress === 'radiant' ? 27 : tier - 3 + i, RankedRating: Math.floor(r() * 99), WinsByTier: ctx.stress === 'radiant' ? { 27: 9 } : { [tier - 2 + i]: 4, [tier + 2]: i === 1 ? 1 : 0 }, GamesNeededForRating: 0, TotalWinsNeededForRank: 0 }]),
       );
       return (
         json(res, 200, {
@@ -324,11 +336,9 @@ export function createExtra(ctx: ExtraCtx) {
       const b = method === 'POST' ? await ctx.readBody(req) : null;
       if (rest === '/queue') party.queue = String(b?.queueId ?? party.queue);
       else if (rest === '/matchmaking/join') {
-        party.state = 'MATCHMAKING';
-        party.queueEntry = new Date().toISOString();
+        if (phase === 'idle') ctx.goto('queue'); // the mock's queue pops after its queue duration
       } else if (rest === '/matchmaking/leave') {
-        party.state = 'DEFAULT';
-        party.queueEntry = '0001-01-01T00:00:00Z';
+        if (phase === 'queue') ctx.goto('idle');
       } else if (rest === '/accessibility') party.accessibility = b?.accessibility === 'OPEN' ? 'OPEN' : 'CLOSED';
       else if (rest === '/invitecode') party.code = method === 'DELETE' ? '' : 'MOCK42';
       else if (/^\/invites\/name\/[^/]+\/tag\/[^/]+$/.test(rest)) {
@@ -338,6 +348,7 @@ export function createExtra(ctx: ExtraCtx) {
       else if (/^\/members\/[^/]+\/refreshPings$/.test(rest)) {
         /* pings unchanged in mock */
       } else return notFound(res, `mock: no party route ${rest}`), true;
+      ctx.emitParty();
       return json(res, 200, partyJson()), true;
     }
     return false;

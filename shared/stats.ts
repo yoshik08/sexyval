@@ -91,3 +91,59 @@ export function filterMatches(rows: MatchRow[], f: HistoryFilter): MatchRow[] {
       (!f.to || r.startTime <= f.to),
   );
 }
+
+/**
+ * Current competitive rank for an act, and the peak across every act with the act it was reached in.
+ * Peak per act = the higher of its final CompetitiveTier and any tier it won games at (WinsByTier).
+ * `currentTier` 0 means no rank this act (Unrated). Only the competitive queue counts.
+ */
+export function currentAndPeak(mmr: any, actId?: string): { currentTier: number; rr: number; peakTier: number; peakSeasonId?: string } {
+  const seasons: Record<string, any> = mmr?.QueueSkills?.competitive?.SeasonalInfoBySeasonID ?? {};
+  let peakTier = 0;
+  let peakSeasonId: string | undefined;
+  for (const [id, s] of Object.entries(seasons)) {
+    let t = Number(s?.CompetitiveTier) || 0;
+    for (const k of Object.keys(s?.WinsByTier ?? {})) if ((Number(s.WinsByTier[k]) || 0) > 0) t = Math.max(t, Number(k) || 0);
+    if (t > peakTier) {
+      peakTier = t;
+      peakSeasonId = String(s?.SeasonID ?? id).toLowerCase();
+    }
+  }
+  let currentTier = 0;
+  let rr = 0;
+  const latest = mmr?.LatestCompetitiveUpdate;
+  const cur = actId ? Object.entries(seasons).find(([id, s]) => String(s?.SeasonID ?? id).toLowerCase() === actId.toLowerCase())?.[1] : undefined;
+  if (cur) {
+    currentTier = Number(cur.CompetitiveTier) || 0;
+    rr = Number(cur.RankedRating) || 0;
+  } else if (latest && (!actId || String(latest.SeasonID ?? '').toLowerCase() === actId.toLowerCase())) {
+    currentTier = Number(latest.TierAfterUpdate) || 0;
+    rr = Number(latest.RankedRatingAfterUpdate) || 0;
+  }
+  if (currentTier <= 2) {
+    currentTier = 0;
+    rr = 0;
+  }
+  if (peakTier <= 2) {
+    peakTier = 0;
+    peakSeasonId = undefined;
+  }
+  return { currentTier, rr, peakTier, peakSeasonId };
+}
+
+/** Act id -> "Episode 9 Act III" / "Season 2025 Act I" using valorant-api seasons (act + its parent). */
+export function actLabel(seasons: { id: string; name?: string; parentId?: string }[], actId?: string): string | undefined {
+  if (!actId) return undefined;
+  const act = seasons.find((s) => s.id === actId.toLowerCase());
+  if (!act?.name) return undefined;
+  const parent = act.parentId ? seasons.find((s) => s.id === act.parentId) : undefined;
+  const raw = `${parent?.name ? `${parent.name} ` : ''}${act.name}`;
+  return raw
+    .replace(/\s*(?::|\/\/)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .split(' ')
+    .map((w, i, all) => (all[i - 1] === 'act' && /^(?:i{1,3}|iv|vi{0,3}|ix|x{1,3})$/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}

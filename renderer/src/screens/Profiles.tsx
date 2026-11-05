@@ -5,6 +5,7 @@ import { queueName } from '../../../shared/queues';
 import { cx } from '../lib/format';
 import { Img, Panel, RankBadge, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, PageHeader, TabBar } from '../components/kit';
+import { TrackerButton } from '../components/players';
 import { DeltaBars, HBars, LineChart } from '../components/charts';
 
 const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -146,6 +147,9 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue 
                   <span className="text-faint">#{profile.tag ?? '?'}</span>
                 </h2>
                 <div className="mt-1 text-sm text-muted">Level {profile.level ?? '–'}{profile.leaderboardRank ? ` · Leaderboard #${profile.leaderboardRank}` : ''}</div>
+                <div className="mt-3">
+                  <TrackerButton p={{ name: profile.name, tag: profile.tag, incognito: false, isMe: profile.isMe }} compact />
+                </div>
               </div>
               <div className="flex gap-8">
                 <div>

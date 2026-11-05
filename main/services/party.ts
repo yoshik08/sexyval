@@ -5,6 +5,7 @@ import type { CatalogService } from './catalog';
 import type { NameService } from './history';
 import { assetUrl } from './assets';
 import { HttpError } from '../riot/http';
+import { parsePartyCore } from '../../shared/party';
 
 const enc = encodeURIComponent;
 
@@ -42,16 +43,17 @@ export class PartyService {
       const members: any[] = Array.isArray(j.Members) ? j.Members : [];
       await this.names.waitFor(members.map((m) => m.Subject).filter(Boolean));
       const cards = this.catalog.catalog.cards;
+      const core = parsePartyCore(j);
       this.view = {
         status: 'ready',
         partyId,
-        state: j.State,
-        queueId: j.MatchmakingData?.QueueID,
-        eligibleQueues: Array.isArray(j.EligibleQueues) ? j.EligibleQueues : [],
-        accessibility: j.Accessibility === 'OPEN' || j.Accessibility === 'CLOSED' ? j.Accessibility : undefined,
-        inviteCode: j.InviteCode || undefined,
-        preferredPods: Array.isArray(j.MatchmakingData?.PreferredGamePods) ? j.MatchmakingData.PreferredGamePods : [],
-        queueEntryTime: j.QueueEntryTime,
+        state: core.state,
+        queueId: core.queueId,
+        eligibleQueues: core.eligibleQueues,
+        accessibility: core.accessibility,
+        inviteCode: core.inviteCode,
+        preferredPods: core.preferredPods,
+        queueEntryTime: core.queueEntryTime,
         isOwner: members.some((m) => m.Subject === me && m.IsOwner === true),
         members: members.map((m) => {
           const n = this.names.get(m.Subject);

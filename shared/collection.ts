@@ -81,7 +81,7 @@ export function filterSkins(skins: CatalogSkin[], f: SkinFilter, owned: OwnedSet
   if (f.sort === 'owned') out.sort((x, y) => Number(owned ? isSkinOwned(y, owned) : 0) - Number(owned ? isSkinOwned(x, owned) : 0) || byTier(x, y));
   else if (f.sort === 'name') out.sort(byName);
   else if (f.sort === 'tier') out.sort(byTier);
-  // "newest": no release date exists in the catalog. Approximation: first time SexyVal saw the
+  // "newest": no release date exists in the catalog. Stand-in: first time SexyVal saw the
   // skin, then catalog order (newer skins tend to be listed first per weapon).
   else out.sort((a, b) => b.firstSeen - a.firstSeen || a.order - b.order);
   return out;

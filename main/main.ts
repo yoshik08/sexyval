@@ -1,8 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, Tray, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import type { AppState, Phase, Settings, ShopView, Toast } from '../shared/types';
 import { registerSchemes, handleApp, handleAssets, handleVideos, handleLocal, videoCacheInfo, clearVideoCache, MB } from './protocol';
-import { loadSettings, getSettings, updateSettings, onSettings } from './settings';
+import { loadSettings, getSettings, updateSettings, onSettings, publicSettings } from './settings';
 import { dataDir, readJson, writeJson } from './paths';
 import { log } from './log';
 import { applyAppIcon, APP_ID } from './appIcon';
@@ -24,7 +24,16 @@ import { ProfileService } from './services/profiles';
 import { HubService } from './services/hub';
 import { AccountManager, REAL_AUTH_URLS, type AuthUrls } from './auth/accounts';
 import { GameLoop } from './loop';
-import type { MockHandle } from '../mock/server';
+import { MmrService } from './services/mmr';
+import { OffersService } from './services/offers';
+import { RiotEvents } from './riot/events';
+import { defaultValorantConfigDir, detectDisplayMode } from './services/displayMode';
+import type { DisplayMode } from '../shared/fullscreen';
+import { trackerUrl } from '../shared/tracker';
+import type { MockHandle, MockPhase } from '../mock/server';
+import { AppUpdater, RELEASES_URL } from './update';
+import { ResumeStore } from './services/resume';
+import type { ResumeFile, UiReport, UiResumeState } from '../shared/update';
 
 const MOCK = process.env.MOCK === '1';
 const SHOTS = process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS;
@@ -44,9 +53,16 @@ let shop: ShopService | null = null;
 const overlay = new AgentSelectOverlay(getSettings);
 let mock: MockHandle | null = null;
 let accounts: AccountManager | null = null;
+let events: RiotEvents | null = null;
+let displayMode: DisplayMode | null = null;
+let fullscreenWarned = false;
+let valorantConfigDir = defaultValorantConfigDir();
 const debug = new DebugStore();
 const recentToasts = new Map<string, number>();
 const rpc: Record<string, (...args: any[]) => unknown> = {};
+let resume: ResumeStore | null = null;
+let resumed: ResumeFile | null = null;
+let updater: AppUpdater | null = null;
 
 /** Side calibration was removed (the rule is hardcoded now); delete what it stored. Nothing to do once gone. */
 async function removeOldCalibrationData(): Promise<void> {
@@ -130,8 +146,8 @@ function createWindow(): BrowserWindow {
     if (!url.startsWith('app://sexyval/')) e.preventDefault();
   });
   // Capture modes must never take focus: a focused test window catches keystrokes meant for the game.
-  // Started at Windows login (--hidden) with close-to-tray on: stay in the tray until clicked.
-  const startHidden = process.argv.includes('--hidden') && getSettings().closeToTray;
+  // Started at Windows login (--hidden), or relaunching hidden after a silent update, with close-to-tray on: stay in the tray until clicked.
+  const startHidden = (process.argv.includes('--hidden') || resumed?.hiddenInTray) && getSettings().closeToTray;
   w.once('ready-to-show', () => (SHOTS ? w.showInactive() : startHidden ? undefined : w.show()));
   const saveBounds = () => {
     if (w.isDestroyed() || w.isMinimized()) return;
@@ -190,7 +206,7 @@ async function startServices(): Promise<void> {
   let shooterLogPath: string | undefined;
   if (MOCK) {
     const { startMockServer } = await import('../mock/server');
-    const durations = process.env.MOCK_FAST === '1' ? { idle: 6000, pregame: 12000, ingame: 10000 } : undefined;
+    const durations = process.env.MOCK_FAST === '1' ? { idle: 6000, queue: 4000, pregame: 12000, ingame: 10000 } : undefined;
     mock = await startMockServer({ quiet: false, durations });
     lockfilePath = mock.lockfilePath;
     overrideGlz = `${mock.base}/glz`;
@@ -203,7 +219,8 @@ async function startServices(): Promise<void> {
       userinfo: `${mock.base}/__auth/userinfo`,
       geo: `${mock.base}/__auth/geo`,
     };
-    if (process.env.MOCK_PHASE) mock.setPhase(process.env.MOCK_PHASE as Phase, 20_000);
+    if (process.env.MOCK_PHASE) mock.setPhase(process.env.MOCK_PHASE as MockPhase, 20_000);
+    valorantConfigDir = mock.valorantConfigDir;
   }
 
   const onRaw = (k: string, d: unknown) => debug.put(k, d);
@@ -236,11 +253,26 @@ async function startServices(): Promise<void> {
   const assets = new AssetService(dataDir('assets'));
   const history = new HistoryService(api, assets, dataDir('matches'), () => emitLater());
   const names = new NameService(api, () => emitLater());
-  const prices = new PriceBook(dataDir('prices.json'), () => send('prices', prices.quotes(catalog.catalog)));
+  const sendPrices = () => send('prices', prices.quotes(catalog.catalog, offers.prices(catalog.catalog)));
+  const prices = new PriceBook(dataDir('prices.json'), () => sendPrices());
   await prices.load();
+  const offers = new OffersService(dataDir('offers.json'), MOCK && mock ? `${mock.base}/henrik` : 'https://api.henrikdev.xyz', () => getSettings().henrikKey, () => sendPrices(), onRaw);
+  await offers.load();
+  let reportedFor = '';
   const catalog = new CatalogService(dataDir('catalog'), () => {
     send('catalog', catalog.catalog);
-    send('prices', prices.quotes(catalog.catalog));
+    sendPrices();
+    // Once per catalog: how many skins have a known price, an approximation, or nothing.
+    if (catalog.catalog.skins.length && reportedFor !== String(catalog.catalog.version)) {
+      reportedFor = String(catalog.catalog.version);
+      const counts: Record<string, number> = {};
+      for (const q of Object.values(prices.quotes(catalog.catalog, offers.prices(catalog.catalog)))) {
+        const k = q.kind === 'exact' ? `exact:${q.source}` : q.kind === 'approx' ? `approx:${q.basis}` : q.kind;
+        counts[k] = (counts[k] ?? 0) + 1;
+      }
+      log.info(`prices: ${Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')} (of ${catalog.catalog.skins.length} skins)`);
+    }
+    void offers.refresh(catalog.catalog).then(sendPrices);
   });
   const owned = new OwnedService(api, (s) => {
     send('owned', s);
@@ -268,6 +300,7 @@ async function startServices(): Promise<void> {
   const party = new PartyService(api, assets, catalog, names);
   const loadout = new LoadoutService(api, dataDir('loadout-presets.json'), () => void owned.refresh());
   const profiles = new ProfileService(api, assets, catalog, history, names);
+  const mmr = new MmrService(api, assets, catalog, () => emitLater());
   const hub = new HubService(api, assets, catalog, dataDir('lineups.json'), dataDir('lineups'));
   handleLocal(dataDir('lineups'));
 
@@ -281,10 +314,13 @@ async function startServices(): Promise<void> {
     emit: (s: AppState) => {
       send('state', s);
       overlay.update(s);
+      onPhase(s);
     },
     toast,
     mock: MOCK,
     pollMs: () => Number(process.env.SEXYVAL_POLL_MS) || (MOCK ? 2000 : getSettings().pollMs),
+    mmr,
+    eventsState: () => events?.state ?? 'off',
     onAccount: (puuid) => owned.ensure(puuid),
     onNoTokens: () => {
       if (owned.state.status !== 'signed-out') owned.signedOut();
@@ -292,6 +328,26 @@ async function startServices(): Promise<void> {
   });
   emitLater = () => loop?.requestEmit();
   loop.start();
+  // Instant phase changes from the Riot Client's own event socket; polling stays as the fallback.
+  events = new RiotEvents(
+    () => session.lockInfo,
+    (uri) => {
+      log.info(`event ${uri.replace(/[0-9a-f-]{36}/gi, '…')}`);
+      loop?.nudge();
+    },
+    () => loop?.requestEmit(),
+  );
+  events.start();
+
+  // Tray text + display-mode check follow the phase.
+  let lastPhaseKey = '';
+  function onPhase(s: AppState): void {
+    const key = `${s.conn.message}|${s.conn.valorant}`;
+    if (key === lastPhaseKey) return;
+    lastPhaseKey = key;
+    tray?.setToolTip(s.conn.status === 'connected' ? `SexyVal · ${s.conn.message}` : 'SexyVal');
+    if (s.conn.valorant) void checkDisplayMode();
+  }
 
   // Public catalog loads regardless of login.
   void catalog.load();
@@ -311,14 +367,33 @@ async function startServices(): Promise<void> {
     if (typeof v !== 'string' || v.length > max) throw new Error('bad argument');
     return v;
   };
+  const uiReport = (v: unknown): UiReport => {
+    const o = v as Partial<UiReport> | null;
+    if (!o || typeof o !== 'object' || !o.nav || typeof o.nav.view !== 'string') throw new Error('bad ui report');
+    const nav: UiResumeState = {
+      view: o.nav.view.slice(0, 32),
+      sub: typeof o.nav.sub === 'string' ? o.nav.sub.slice(0, 32) : undefined,
+      scrollTop: typeof o.nav.scrollTop === 'number' && Number.isFinite(o.nav.scrollTop) ? Math.max(0, Math.round(o.nav.scrollTop)) : 0,
+      profileQuery: typeof o.nav.profileQuery === 'string' ? o.nav.profileQuery.slice(0, 64) : undefined,
+    };
+    return { nav, videoPlaying: !!o.videoPlaying, unsavedLoadoutChanges: !!o.unsavedLoadoutChanges };
+  };
   Object.assign(rpc, {
     'catalog:get': () => catalog.catalog,
     'catalog:refresh': () => catalog.load(true).then(() => catalog.catalog),
     'browse:get': () => catalog.browse,
     'owned:get': () => owned.state,
     'owned:refresh': () => owned.refresh(),
-    // Every catalog skin gets a quote: exact (seen in the live store), a contract reward, or the typical tier price.
-    'prices:get': () => prices.quotes(catalog.catalog),
+    // Every catalog skin gets a quote: an exact price (your store, then HenrikDev offers), a contract reward, or the reason there is none.
+    'prices:get': () => prices.quotes(catalog.catalog, offers.prices(catalog.catalog)),
+    'offers:status': () => offers.status,
+    'offers:refresh': () => offers.refresh(catalog.catalog, true).then(() => (sendPrices(), offers.status)),
+    'overlay:displayMode': () => checkDisplayMode().then(() => displayMode),
+    'open:tracker': (name: unknown, tag: unknown) => {
+      const url = trackerUrl(str(name, 32), str(tag, 16));
+      if (!url) throw new Error('bad Riot ID');
+      return shell.openExternal(url);
+    },
     'wishlist:get': () => shop?.wishlistIds ?? [],
     'wishlist:toggle': (id: unknown) => shop?.toggleWish(str(id, 64)),
     'overlay:displays': () => listDisplays(),
@@ -378,6 +453,10 @@ async function startServices(): Promise<void> {
       if (r.canceled || !r.filePaths[0]) return null;
       return hub.importImage(r.filePaths[0]);
     },
+    'ui:report': (v: unknown) => resume?.report(uiReport(v)),
+    'update:status': () => updater?.status,
+    'update:check': () => updater?.checkNow(),
+    'update:openReleases': () => shell.openExternal(RELEASES_URL),
   });
 
   onSettings((s, prev) => {
@@ -391,15 +470,31 @@ async function startServices(): Promise<void> {
       overlay.update(loop?.state);
     }
     if (s.overlayPosition !== prev.overlayPosition || s.overlayScale !== prev.overlayScale || s.overlayDisplay !== prev.overlayDisplay) overlay.relayout();
+    if (s.overlayEnabled && !prev.overlayEnabled) void checkDisplayMode();
+    if (s.henrikKey !== prev.henrikKey) void offers.refresh(catalog.catalog, true).then(sendPrices);
   });
+}
+
+/**
+ * Exclusive Fullscreen hides every normal window, the overlay included. Read Valorant's own settings
+ * file (read-only) and warn once per run; say nothing when the file can't be found.
+ */
+async function checkDisplayMode(): Promise<void> {
+  const found = await detectDisplayMode(valorantConfigDir, loop?.state.conn.puuid).catch(() => null);
+  displayMode = found?.mode ?? null;
+  if (displayMode === 'fullscreen' && getSettings().overlayEnabled && !fullscreenWarned) {
+    fullscreenWarned = true;
+    toast('warn', 'Valorant is in Fullscreen. Switch Display Mode to Windowed Fullscreen to see the overlay.');
+  }
 }
 
 function registerIpc(): void {
   handle('state:get', () => loop?.state);
   handle('shop:get', () => shop?.view ?? { status: 'idle', daily: [], wallet: null });
   handle('shop:refresh', () => shop?.refresh());
-  handle('settings:get', () => getSettings());
-  handle('settings:set', (patch: Partial<Settings>) => updateSettings(patch ?? {}));
+  // The renderer never sees the HenrikDev key, only that one is set.
+  handle('settings:get', () => publicSettings());
+  handle('settings:set', (patch: Partial<Settings>) => publicSettings(updateSettings(patch ?? {})));
   handle('debug:get', () => debug.dump());
   handle('mock:is', () => MOCK);
   handle('mock:phase', (p: Phase | 'auto' | 'offline' | 'noval') => {
@@ -438,16 +533,34 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.themeSource = 'dark';
     app.setAppUserModelId(APP_ID);
     await loadSettings();
+    resume = new ResumeStore(dataDir('resume.json'));
+    resumed = await resume.consume().catch(() => null);
     handleApp(path.join(app.getAppPath(), 'dist-renderer'));
     handleAssets(dataDir('assets', 'img'));
     handleVideos({ dir: dataDir('videos'), cacheEnabled: () => getSettings().cacheVideos, maxBytes: () => getSettings().videoCacheMaxMb * MB });
     registerIpc();
     win = createWindow();
     applyAppIcon(win, getSettings().appIcon, iconPath()); // re-apply the saved choice (shortcuts may have been recreated by an update)
+    if (resumed) {
+      const r = resumed;
+      win.webContents.once('did-finish-load', () => {
+        if (r.ui) send('resume', r.ui);
+        if (r.version !== app.getVersion()) toast('info', `Updated to ${app.getVersion()}`);
+      });
+    }
     if (!SHOTS) createTray();
     await removeOldCalibrationData();
     await startServices();
     for (const ev of ['display-added', 'display-removed', 'display-metrics-changed'] as const) screen.on(ev as any, () => overlay.relayout());
+
+    updater = new AppUpdater({
+      getWindow: () => win,
+      getPhase: () => loop?.state.phase ?? 'idle',
+      getSettings,
+      resume,
+      onStatus: (s) => send('update', s),
+    });
+    if (!SHOTS) updater.start(); // start() itself no-ops unless packaged (or SEXYVAL_UPDATE_FEED_URL is set for manual testing)
 
     if (process.env.SEXYVAL_LIVE_SHOTS && !MOCK) {
       const { runLiveShots } = await import('./screenshots');
@@ -468,7 +581,9 @@ if (!app.requestSingleInstanceLock()) {
     overlay.destroy();
     quitting = true;
     loop?.stop();
+    events?.stop();
     accounts?.stop();
+    updater?.stop();
     void mock?.close();
   });
   app.on('window-all-closed', () => {

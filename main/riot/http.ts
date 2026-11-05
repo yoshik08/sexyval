@@ -1,7 +1,7 @@
 import { Agent, fetch } from 'undici';
 
 // Self-signed cert is accepted ONLY for the local Riot Client on 127.0.0.1.
-const localInsecure = new Agent({ connect: { rejectUnauthorized: false } });
+export const localInsecure = new Agent({ connect: { rejectUnauthorized: false } });
 
 export interface HttpResult {
   status: number;

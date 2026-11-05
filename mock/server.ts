@@ -3,17 +3,28 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { AGENTS, BOMB_MODE, DM_MODE, MAPS, ME, nameFor, pick, rng, uuid } from './data';
-import { createExtra, mockFixtures, SIGNIN_ACCESS } from './extra';
+import { createExtra, mockFixtures, SIGNIN_ACCESS, type Stress } from './extra';
+import { attachEvents, type MockEvents } from './ws';
 
-/** offline = Riot Client closed; noval = Riot Client open, Valorant closed. */
-export type MockPhase = 'idle' | 'pregame' | 'ingame' | 'offline' | 'noval';
+/** offline = Riot Client closed; noval = Riot Client open, Valorant closed; queue = party matchmaking. */
+export type MockPhase = 'idle' | 'queue' | 'pregame' | 'ingame' | 'offline' | 'noval';
 
 export interface MockOptions {
   port?: number;
   lockDir?: string;
-  durations?: { idle: number; pregame: number; ingame: number };
+  durations?: Partial<{ idle: number; queue: number; pregame: number; ingame: number }>;
   quiet?: boolean;
+  /**
+   * HenrikDev store-offers. 'removed' (default) answers 404 RiotImplementationRemoved like production
+   * does today; 'offers' serves a legacy offers payload so the parsing path can be exercised.
+   */
+  henrik?: 'removed' | 'offers';
+  /** Worst-case data for UI checks (MOCK_STRESS): long-names, radiant, unrated, nommr, hidden. */
+  stress?: Stress;
 }
+
+/** Valid key for the mock HenrikDev API; anything else is 401. */
+export const MOCK_HENRIK_KEY = 'HDEV-mock-0000-key';
 
 export interface MockHandle {
   port: number;
@@ -21,6 +32,9 @@ export interface MockHandle {
   lockfilePath: string;
   setPhase(p: MockPhase | 'auto', elapsedMs?: number): void;
   phase(): MockPhase;
+  events: MockEvents;
+  /** Folder holding a fake VALORANT\Saved\Config (fullscreen-mode detection). */
+  valorantConfigDir: string;
   close(): Promise<void>;
 }
 
@@ -50,6 +64,25 @@ interface Scenario {
   startedAt: number;
 }
 
+/** Plausible worst-case Riot IDs (16-char names, 5-char tags, non-Latin, no spaces to break on). */
+const LONG = [
+  ['Wiśniewska-Kowal', 'PL420'],
+  ['WWWWWWWWWWWWWWWW', 'WWWWW'],
+  ['이시하라사토미이시하라사토미', '한국'],
+  ['Bartholomew Fitz', '00000'],
+  ['ｆｕｌｌｗｉｄｔｈｎａｍｅ', 'ＪＰ1'],
+  ['x', '1'],
+  ['ÆØÅ ÆØÅ ÆØÅ ÆØÅ', 'NORD'],
+  ['sixteencharsname', 'EUW1'],
+  ['O\'Connor-McAlli', 'IRL'],
+  ['😀😀😀😀😀😀😀😀', 'EMOJI'],
+];
+function longNameFor(puuid: string): { GameName: string; TagLine: string } {
+  const r = rng('long' + puuid);
+  const [GameName, TagLine] = LONG[Math.floor(r() * LONG.length)];
+  return { GameName, TagLine };
+}
+
 interface HistEntry {
   MatchID: string;
   GameStartTime: number;
@@ -57,7 +90,12 @@ interface HistEntry {
 }
 
 export async function startMockServer(opts: MockOptions = {}): Promise<MockHandle> {
-  const durations = opts.durations ?? { idle: 20_000, pregame: 45_000, ingame: 60_000 };
+  const durations = { idle: 20_000, queue: 8_000, pregame: 45_000, ingame: 60_000, ...(opts.durations ?? {}) };
+  const henrik = opts.henrik ?? (process.env.MOCK_HENRIK === 'offers' ? 'offers' : 'removed');
+  const stress = (opts.stress ?? process.env.MOCK_STRESS ?? '') as Stress;
+  let events: MockEvents | null = null;
+  const PARTY_ID = uuid('party-me');
+  const evt = (svc: string, rest: string) => events?.emit(`/riot-messaging-service/v1/message/${svc}/${rest}`);
   const lockDir = opts.lockDir ?? path.join(os.tmpdir(), 'sexyval-mock');
   const lockfilePath = path.join(lockDir, 'lockfile');
   const say = (...a: unknown[]) => !opts.quiet && console.log('[mock]', ...a);
@@ -90,7 +128,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     const agents = new Map<string, string>();
     [...allies, ...enemies].forEach((p, i) => agents.set(p, pool[i % pool.length]));
     const tiers = new Map<string, number>();
-    for (const p of [...allies, ...enemies]) tiers.set(p, 9 + Math.floor(r() * 14));
+    for (const p of [...allies, ...enemies]) tiers.set(p, stress === 'unrated' ? 0 : stress === 'radiant' ? 27 : 9 + Math.floor(r() * 14));
     return {
       id: uuid(`match${matchN}${bootAt}`),
       n: matchN,
@@ -102,7 +140,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       enemies,
       agents,
       tiers,
-      incognito: new Set([allies[3], enemies[2]]),
+      incognito: stress === 'hidden' ? new Set([...allies.slice(1), ...enemies]) : new Set([allies[3], enemies[2]]),
       startedAt: Date.now(),
     };
   }
@@ -117,6 +155,13 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     phase = p;
     phaseStart = Date.now() - elapsed;
     say(`phase -> ${p}`);
+    // Same pushes the Riot Client sends: party state changes, pregame/core-game match updates.
+    if (p !== prev) {
+      if (p === 'queue' || prev === 'queue' || p === 'idle') evt('ares-parties', `parties/v1/parties/${PARTY_ID}`);
+      if (p === 'pregame' && scenario) evt('ares-pregame', `pregame/v1/matches/${scenario.id}`);
+      if ((p === 'ingame' || prev === 'ingame') && scenario) evt('ares-core-game', `core-game/v1/matches/${scenario.id}`);
+      if (prev === 'ingame' && p === 'idle') evt('ares-core-game', `core-game/v1/players/${ME}`);
+    }
   }
 
   function finishScenario(s: Scenario) {
@@ -136,7 +181,8 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     if (!auto || phase === 'offline') return;
     const t = Date.now() - phaseStart;
     if (phase === 'noval') return;
-    if (phase === 'idle' && t > durations.idle) enterPhase('pregame');
+    if (phase === 'idle' && t > durations.idle) enterPhase('queue');
+    else if (phase === 'queue' && t > durations.queue) enterPhase('pregame');
     else if (phase === 'pregame' && t > durations.pregame) enterPhase('ingame');
     else if (phase === 'ingame' && t > durations.ingame) enterPhase('idle');
   }
@@ -341,7 +387,8 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       EnemyTeamLockCount: Math.min(5, Math.floor(t / 7)),
       PregameState: 'character_select_active',
       LastUpdated: new Date().toISOString(),
-      MapID: s.map,
+      // The real pregame match can arrive before the map is filled in; the app must show it the moment it is.
+      MapID: t < 1.5 ? '' : s.map,
       MapSelectPool: [],
       BannedMapIDs: [],
       CastedVotes: {},
@@ -457,6 +504,26 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     };
   }
 
+  /** Legacy store/v1/offers shape (v1) or HenrikDev's flattened array (v2), from the fixture price list. */
+  function henrikOffers(v: 'v1' | 'v2') {
+    // Leave a few skins out so the app's coverage report has something to list.
+    const entries = Object.entries(mockFixtures.prices as Record<string, number>).filter((_, i) => i % 97 !== 5);
+    if (v === 'v2') return { status: 200, data: entries.map(([level, cost]) => ({ offer_id: level, cost, name: '', icon: null, type: 'skin_level', skin_id: null, content_tier: null })) };
+    return {
+      status: 200,
+      data: {
+        Offers: entries.map(([level, cost]) => ({
+          OfferID: level,
+          IsDirectPurchase: true,
+          StartDate: '2020-06-02T00:00:00Z',
+          Cost: { [VP]: cost },
+          Rewards: [{ ItemTypeID: 'e7c63390-eda7-46e0-bb7a-a6abdacd2433', ItemID: level, Quantity: 1 }],
+        })),
+        UpgradeCurrencyOffers: [],
+      },
+    };
+  }
+
   const json = (res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
     res.end(JSON.stringify(body));
@@ -476,7 +543,18 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       });
     });
 
-  const extra = createExtra({ phase: () => phase, json, notFound, readBody, ENTITLEMENT });
+  const extra = createExtra({
+    phase: () => phase,
+    queueSince: () => (phase === 'queue' ? phaseStart : null),
+    goto: (p) => enterPhase(p as MockPhase),
+    emitParty: () => evt('ares-parties', `parties/v1/parties/${PARTY_ID}`),
+    partyId: PARTY_ID,
+    stress,
+    json,
+    notFound,
+    readBody,
+    ENTITLEMENT,
+  });
 
   const server = http.createServer(async (req, res) => {
     tickAuto();
@@ -547,6 +625,14 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       }
     }
 
+    // ---- HenrikDev (unofficial third-party API), mounted at /henrik ----
+    if (/^\/henrik\/valorant\/v[12]\/store-offers$/.test(p)) {
+      const auth = req.headers.authorization ?? url.searchParams.get('api_key');
+      if (auth !== MOCK_HENRIK_KEY) return json(res, 401, { errors: [{ code: 0, message: 'Unauthorized', status: 401, details: null }] });
+      if (henrik === 'removed') return json(res, 404, { errors: [{ code: 0, message: 'RiotImplementationRemoved', status: 404, details: 'Removed by Riot' }] });
+      return json(res, 200, henrikOffers(p.includes('/v2/') ? 'v2' : 'v1'));
+    }
+
     let m: RegExpExecArray | null;
     if ((m = /^\/glz\/pregame\/v1\/players\/([^/]+)$/.exec(p))) {
       if (phase !== 'pregame' || !scenario || m[1] !== ME) return notFound(res);
@@ -583,7 +669,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       return json(
         res,
         200,
-        list.map((s) => ({ DisplayName: '', Subject: s, ...(s === ME ? { GameName: 'Vibe', TagLine: '0001' } : nameFor(s)) })),
+        list.map((s) => ({ DisplayName: '', Subject: s, ...(s === ME ? { GameName: 'Vibe', TagLine: '0001' } : stress === 'long-names' ? longNameFor(s) : nameFor(s)) })),
       );
     }
     if (/^\/pd\/store\/v2\/storefront\/[^/]+$/.test(p)) return notFound(res, 'v2 retired (mock)');
@@ -594,9 +680,15 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     return notFound(res, `mock: no route ${method} ${p}`);
   });
 
+  events = attachEvents(server, PASSWORD);
   await new Promise<void>((resolve) => server.listen(opts.port ?? 0, '127.0.0.1', () => resolve()));
   port = (server.address() as any).port;
   writeLock();
+  // Fake Valorant settings: exclusive Fullscreen (0), so the overlay warning can be seen in mock mode.
+  const valorantConfigDir = path.join(lockDir, 'VALORANT-Config');
+  const acct = path.join(valorantConfigDir, `${ME}-eu`, 'WindowsClient');
+  fs.mkdirSync(acct, { recursive: true });
+  fs.writeFileSync(path.join(acct, 'GameUserSettings.ini'), '[/Script/ShooterGame.ShooterGameUserSettings]\r\nLastConfirmedFullscreenMode=0\r\nPreferredFullscreenMode=0\r\nFullscreenMode=0\r\n');
   say(`listening on 127.0.0.1:${port}, lockfile ${lockfilePath}`);
 
   return {
@@ -612,9 +704,12 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       enterPhase(p, elapsedMs);
     },
     phase: () => phase,
+    events: events!,
+    valorantConfigDir,
     close: () =>
       new Promise<void>((resolve) => {
         removeLock();
+        events?.close();
         server.close(() => resolve());
       }),
   };
