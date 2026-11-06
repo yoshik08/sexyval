@@ -284,7 +284,11 @@ async function startServices(): Promise<void> {
   const assets = new AssetService(dataDir('assets'));
   const history = new HistoryService(api, assets, dataDir('matches'), () => emitLater());
   const names = new NameService(api, () => emitLater());
-  const sendPrices = () => send('prices', prices.quotes(catalog.catalog, offers.prices(catalog.catalog)));
+  // Price loads below fire this before `offers` and `catalog` exist; wait until both are built.
+  let pricesReady = false;
+  const sendPrices = () => {
+    if (pricesReady) send('prices', prices.quotes(catalog.catalog, offers.prices(catalog.catalog)));
+  };
   const prices = new PriceBook(dataDir('prices.json'), () => sendPrices());
   await prices.load();
   // Wiki prices re-scraped once per game version (user data folder); the bundled list is the fallback.
@@ -316,6 +320,7 @@ async function startServices(): Promise<void> {
     }
     void offers.refresh(catalog.catalog).then(sendPrices);
   });
+  pricesReady = true;
   const owned = new OwnedService(api, (s) => {
     send('owned', s);
     shop?.refreshOwnedFlags();
@@ -674,7 +679,15 @@ if (!app.requestSingleInstanceLock()) {
     }
     if (!SHOTS) createTray();
     await removeOldCalibrationData();
-    await startServices();
+    // A failure here must not take the updater down with it: that is how a fixed build gets in.
+    try {
+      await startServices();
+    } catch (e) {
+      log.error('startup failed', e);
+      const msg = `SexyVal couldn't start: ${(e as Error).message}`;
+      if (win.webContents.isLoading()) win.webContents.once('did-finish-load', () => toast('error', msg));
+      else toast('error', msg);
+    }
     for (const ev of ['display-added', 'display-removed', 'display-metrics-changed'] as const) screen.on(ev as any, () => overlay.relayout());
 
     updater = new AppUpdater({
