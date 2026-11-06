@@ -106,8 +106,8 @@ export class RiotApi {
   mmr(puuid: string) {
     return this.json('pd', 'GET', `/mmr/v1/players/${puuid}`, { raw: 'mmr' });
   }
-  competitiveUpdates(puuid: string, endIndex = 20, queue = 'competitive') {
-    return this.json('pd', 'GET', `/mmr/v1/players/${puuid}/competitiveupdates?startIndex=0&endIndex=${endIndex}&queue=${enc(queue)}`, { raw: 'competitiveUpdates' });
+  competitiveUpdates(puuid: string, endIndex = 20, queue = 'competitive', startIndex = 0) {
+    return this.json('pd', 'GET', `/mmr/v1/players/${puuid}/competitiveupdates?startIndex=${startIndex}&endIndex=${endIndex}&queue=${enc(queue)}`, { raw: 'competitiveUpdates' });
   }
   leaderboard(seasonId: string, startIndex = 0, size = 50, query?: string) {
     const region = this.session.region ?? 'na';
@@ -153,6 +153,20 @@ export class RiotApi {
     this.onRaw('storefrontV2', { status: v2.status, path: safePath(v2.url), body: v2.json ?? v2.text.slice(0, 4000) });
     if (v2.status === 200 && v2.json) return { res: v2, source: `v2 GET (v3 returned ${v3.status})`, v2Status: v2.status };
     throw new HttpError(v3.status, safePath(v3.url), v3.text.slice(0, 500));
+  }
+  /**
+   * Storefront for a signed-in account that isn't the active one (stores differ per account). Same
+   * v3-then-v2 order and the same pd rate limiter; the tokens are only used for this request.
+   */
+  async storefrontFor(auth: { accessToken: string; entitlement: string; puuid: string; region: string }): Promise<HttpResult> {
+    const base = this.session.pdBaseFor(auth.region);
+    const headers = this.session.headersFor(auth);
+    const send = (method: string, p: string, body?: unknown) => withRetry(() => httpRequest(base + p, { method, headers, body }), { limiter: this.pdLimiter, maxRetries: 2 });
+    const v3 = await send('POST', `/store/v3/storefront/${auth.puuid}`, {});
+    if (v3.status === 200 && v3.json) return v3;
+    const v2 = await send('GET', `/store/v2/storefront/${auth.puuid}`);
+    if (v2.status === 200 && v2.json) return v2;
+    throw new HttpError(v3.status, safePath(v3.url), v3.text.slice(0, 300));
   }
   wallet(puuid: string) {
     return this.json('pd', 'GET', `/store/v1/wallet/${puuid}`, { raw: 'wallet' });

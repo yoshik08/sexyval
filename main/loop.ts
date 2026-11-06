@@ -381,6 +381,18 @@ export class GameLoop {
     return { queueId: core.queueId ?? '', queueTag: queueTag(core.queueId ?? ''), queueName: queueName(core.queueId) || 'Custom', enteredAt: core.queueEntryAt };
   }
 
+  /**
+   * True when the live match (agent select or in game) lists this player with their name hidden
+   * (PlayerIdentity.Incognito). Profiles, MMR and lifetime lookups refuse those players, like Live does.
+   */
+  isHidden(puuid: string): boolean {
+    const me = this.d.session.puuid;
+    if (!puuid || puuid === me) return false;
+    const pre = this.rawPregame?.json ? this.allyTeam(this.rawPregame.json, me ?? '')?.Players : undefined;
+    const lists: any[][] = [Array.isArray(pre) ? pre : [], Array.isArray(this.rawCore?.Players) ? this.rawCore.Players : []];
+    return lists.some((l) => l.some((p) => p?.Subject === puuid && p?.PlayerIdentity?.Incognito === true));
+  }
+
   /** Rebuilds and returns the current state (tests). */
   snapshot(): AppState {
     this.rebuild();

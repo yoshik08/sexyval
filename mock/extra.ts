@@ -3,6 +3,7 @@
 // personalization v2 and /store/v1/offers answer 404 exactly like production, so the app cannot lean on them.
 import type http from 'node:http';
 import { AGENTS, ME, nameFor, rng, uuid } from './data';
+import { updateJson, type CareerMatch } from './career';
 import fixtures from './fixtures/collection.json';
 
 const fx: any = fixtures;
@@ -34,6 +35,9 @@ export interface ExtraCtx {
   notFound(res: http.ServerResponse, msg?: string): void;
   readBody(req: http.IncomingMessage): Promise<any>;
   ENTITLEMENT: string;
+  /** A player's matches, newest first (mock/career.ts). */
+  career(puuid: string): CareerMatch[];
+  bootAt: number;
 }
 
 export function createExtra(ctx: ExtraCtx) {
@@ -262,8 +266,14 @@ export function createExtra(ctx: ExtraCtx) {
       if (ctx.stress === 'unrated') {
         return json(res, 200, { Version: 1, Subject: m[1], NewPlayerExperienceFinished: true, QueueSkills: { competitive: { TotalGamesNeededForRating: 5, SeasonalInfoBySeasonID: {} } }, LatestCompetitiveUpdate: null }), true;
       }
+      // The current act's rank is where the player's career ends, so rank, RR history and estimate agree.
+      const latest = ctx.career(m[1]).find((x) => x.queue === 'competitive' && x.actId === fx.progression.act);
       const seasons = Object.fromEntries(
-        fx.progression.acts.map((a: string, i: number) => [a, { SeasonID: a, NumberOfWins: 20 + i, NumberOfWinsWithPlacements: 25 + i, NumberOfGames: 48, Rank: 0, CapstoneWins: 0, LeaderboardRank: 0, CompetitiveTier: ctx.stress === 'radiant' ? 27 : tier - 3 + i, RankedRating: Math.floor(r() * 99), WinsByTier: ctx.stress === 'radiant' ? { 27: 9 } : { [tier - 2 + i]: 4, [tier + 2]: i === 1 ? 1 : 0 }, GamesNeededForRating: 0, TotalWinsNeededForRank: 0 }]),
+        fx.progression.acts.map((a: string, i: number) => {
+          const cur = a === fx.progression.act && latest && ctx.stress !== 'radiant';
+          const t = ctx.stress === 'radiant' ? 27 : cur ? latest.tierAfter : tier - 3 + i;
+          return [a, { SeasonID: a, NumberOfWins: 20 + i, NumberOfWinsWithPlacements: 25 + i, NumberOfGames: 48, Rank: 0, CapstoneWins: 0, LeaderboardRank: 0, CompetitiveTier: t, RankedRating: cur ? latest.rrAfter : Math.floor(r() * 99), WinsByTier: ctx.stress === 'radiant' ? { 27: 9 } : { [t]: 4, [tier + 2]: i === 1 ? 1 : 0 }, GamesNeededForRating: 0, TotalWinsNeededForRank: 0 }];
+        }),
       );
       return (
         json(res, 200, {
@@ -271,7 +281,7 @@ export function createExtra(ctx: ExtraCtx) {
           Subject: m[1],
           NewPlayerExperienceFinished: true,
           QueueSkills: { competitive: { TotalGamesNeededForRating: 5, TotalGamesNeededForLeaderboard: 0, CurrentSeasonGamesNeededForRating: 0, SeasonalInfoBySeasonID: seasons } },
-          LatestCompetitiveUpdate: null,
+          LatestCompetitiveUpdate: latest ? updateJson(latest) : null,
           IsLeaderboardAnonymized: false,
           IsActRankBadgeHidden: false,
         }),
@@ -279,23 +289,12 @@ export function createExtra(ctx: ExtraCtx) {
       );
     }
     if ((m = /^\/pd\/mmr\/v1\/players\/([^/]+)\/competitiveupdates$/.exec(p))) {
-      const r = rng('cu' + m[1]);
-      let tier = 15;
-      let rr = 40;
-      const out = [];
-      for (let i = 0; i < 20; i++) {
-        const delta = Math.round((r() - 0.45) * 40);
-        rr += delta;
-        if (rr >= 100) {
-          tier++;
-          rr -= 100;
-        } else if (rr < 0) {
-          tier--;
-          rr += 100;
-        }
-        out.push({ MatchID: uuid(`${m[1]}-h${19 - i}`), MapID: '/Game/Maps/Ascent/Ascent', SeasonID: fx.progression.act, MatchStartTime: Date.now() - (20 - i) * 47 * 60_000, TierAfterUpdate: tier, TierBeforeUpdate: tier, RankedRatingAfterUpdate: rr, RankedRatingBeforeUpdate: rr - delta, RankedRatingEarned: delta, RankedRatingPerformanceBonus: 0, CompetitiveMovement: 'MOVEMENT_UNKNOWN', AFKPenalty: 0 });
-      }
-      return json(res, 200, { Version: 1, Subject: m[1], Matches: out.reverse() }), true;
+      // Paged like the real endpoint: startIndex/endIndex over the newest-first list; a short page is the last.
+      const start = Math.max(0, Number(url.searchParams.get('startIndex') ?? 0) || 0);
+      const end = Math.max(start, Math.min(start + 20, Number(url.searchParams.get('endIndex') ?? 20) || 20));
+      const queue = url.searchParams.get('queue');
+      const list = ctx.career(m[1]).filter((x) => x.queue === 'competitive' && (!queue || queue === 'competitive'));
+      return json(res, 200, { Version: 1, Subject: m[1], Matches: list.slice(start, end).map(updateJson) }), true;
     }
     if ((m = /^\/pd\/mmr\/v1\/leaderboards\/affinity\/([^/]+)\/queue\/competitive\/season\/([^/]+)$/.exec(p))) {
       const start = Number(url.searchParams.get('startIndex') ?? 0);

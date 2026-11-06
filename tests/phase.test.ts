@@ -207,6 +207,11 @@ describe('GameLoop', () => {
     expect(core.coregame!.enemyTeam[0]).toMatchObject({ name: undefined, svScore: undefined, mmr: undefined });
     // The visible ally does get a score and MMR.
     expect(pre.pregame!.allies.find((p) => p.puuid === ALLY)!.mmr).toEqual({ status: 'done' });
+    // Profiles / MMR / lifetime ask the loop before looking anyone up: hidden players are refused there too.
+    expect(h.loop.isHidden(HIDDEN)).toBe(true);
+    expect(h.loop.isHidden(ENEMY_HIDDEN)).toBe(true);
+    expect(h.loop.isHidden(ALLY)).toBe(false);
+    expect(h.loop.isHidden(ME)).toBe(false);
   });
 
   it('does not fetch enemies in agent select', async () => {

@@ -64,7 +64,9 @@ export class ProfileService {
     throw new Error(`Can't find ${q}. Riot has no documented Name#Tag lookup; SexyVal finds players you've played with or who are on the leaderboard.`);
   }
 
-  private row(d: TrimmedDetails, puuid: string, rr?: { delta: number; tier: number }): MatchRow | null {
+  /** One player's row in a match list (Profiles history, lifetime list). Also indexes the scoreboard's names. */
+  matchRow(d: TrimmedDetails, puuid: string, rr?: { delta: number; tier: number }): MatchRow | null {
+    for (const p of d.players) this.remember(p.subject, p.gameName, p.tagLine);
     const s = summarizeMatch(d, puuid);
     if (!s) return null;
     const p = d.players.find((x) => x.subject === puuid);
@@ -119,8 +121,7 @@ export class ProfileService {
     const details = await Promise.all(ids.map((id) => this.history.getDetails(id).catch(() => null)));
     for (const d of details) {
       if (!d) continue;
-      for (const p of d.players) this.remember(p.subject, p.gameName, p.tagLine);
-      const r = this.row(d, puuid, rrBy.get(d.matchId));
+      const r = this.matchRow(d, puuid, rrBy.get(d.matchId));
       if (r) view.matches.push(r);
     }
     view.matches.sort((a, b) => b.startTime - a.startTime);

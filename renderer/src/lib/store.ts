@@ -44,6 +44,20 @@ export function startStores(): void {
   api.on<Catalog>('catalog', catalogStore.set);
   api.on<OwnedState>('owned', ownedStore.set);
   api.on<PriceMap>('prices', pricesStore.set);
+  // Boost: while Valorant runs, videos stop and hover previews are off (no GPU use from SexyVal).
+  api.on<boolean>('quiet', (on) => {
+    quietStore.set(on);
+    if (on) document.querySelectorAll('video').forEach((v) => v.pause());
+  });
+}
+
+const quietStore = createStore(false);
+export const useQuiet = () => useStore(quietStore);
+/** Hover previews: the setting, unless Boost has SexyVal staying quiet during a match. */
+export function usePreviews(): boolean {
+  const s = useSettings();
+  const quiet = useQuiet();
+  return (s?.hoverPreviews ?? true) && !quiet;
 }
 
 export function useStore<T>(store: ReturnType<typeof createStore<T>>): T {
@@ -59,6 +73,13 @@ export const useSettings = () => useStore(settingsStore);
 
 /** Any <video> currently claimed for playback, across the whole app. */
 export const useVideoPlaying = () => useSyncExternalStore(onPlaybackChange, isVideoPlaying);
+
+/** Cross-screen navigation to a player (Live row -> Profiles / MMR). App listens and switches tabs. */
+export const playerNavStore = createStore<{ view: 'profiles' | 'mmr'; query: string; n: number } | null>(null);
+let navSeq = 0;
+export function openPlayer(view: 'profiles' | 'mmr', query: string): void {
+  playerNavStore.set({ view, query, n: ++navSeq });
+}
 
 const loadoutDirtyStore = createStore(false);
 /** Unmounting Loadout already discards its draft, so this is only ever true while that screen is up. */

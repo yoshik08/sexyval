@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { AGENTS, BOMB_MODE, DM_MODE, MAPS, ME, nameFor, pick, rng, uuid } from './data';
 import { createExtra, mockFixtures, SIGNIN_ACCESS, type Stress } from './extra';
 import { attachEvents, type MockEvents } from './ws';
+import { career, PERSONA, type CareerMatch, type Persona } from './career';
 
 /** offline = Riot Client closed; noval = Riot Client open, Valorant closed; queue = party matchmaking. */
 export type MockPhase = 'idle' | 'queue' | 'pregame' | 'ingame' | 'offline' | 'noval';
@@ -21,6 +22,8 @@ export interface MockOptions {
   henrik?: 'removed' | 'offers';
   /** Worst-case data for UI checks (MOCK_STRESS): long-names, radiant, unrated, nommr, hidden. */
   stress?: Stress;
+  /** Your own MMR persona (MOCK_MMR): above (default), at, below, excluded. */
+  mmr?: Persona;
 }
 
 /** Valid key for the mock HenrikDev API; anything else is 401. */
@@ -33,6 +36,8 @@ export interface MockHandle {
   setPhase(p: MockPhase | 'auto', elapsedMs?: number): void;
   phase(): MockPhase;
   events: MockEvents;
+  /** Request paths served so far (tests: which endpoints were called, and that nothing else was). */
+  requests: string[];
   /** Folder holding a fake VALORANT\Saved\Config (fullscreen-mode detection). */
   valorantConfigDir: string;
   close(): Promise<void>;
@@ -110,6 +115,22 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
   const histories = new Map<string, HistEntry[]>();
   const owners = new Map<string, string>();
   const finished = new Map<string, any>();
+  const requests: string[] = [];
+  const mePersona = (opts.mmr ?? process.env.MOCK_MMR ?? 'above') as Persona;
+  const acts = mockFixtures.progression.acts as string[];
+  const actPair: [string, string] = [acts[acts.length - 2] ?? acts[0], mockFixtures.progression.act];
+  const careers = new Map<string, CareerMatch[]>();
+  const careerById = new Map<string, CareerMatch>();
+  /** Every player's matches (newest first); one source for history, competitive updates and details. */
+  const careerOf = (puuid: string): CareerMatch[] => {
+    let c = careers.get(puuid);
+    if (!c) {
+      c = career(puuid, actPair, bootAt, mePersona);
+      careers.set(puuid, c);
+      for (const m of c) careerById.set(m.id, m);
+    }
+    return c;
+  };
   let port = 0;
 
   const writeLock = () => {
@@ -122,13 +143,14 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     matchN++;
     const r = rng(`scenario${matchN}${bootAt}`);
     const myTeam: Color = r() < 0.5 ? 'Blue' : 'Red';
-    const allies = [ME, ...Array.from({ length: 4 }, (_, i) => uuid(`ally${matchN}-${i}`))];
-    const enemies = Array.from({ length: 5 }, (_, i) => uuid(`enemy${matchN}-${i}`));
+    // The MMR personas and the tracker-private player sit in every mock match, so Live can open each of them.
+    const allies = [ME, PERSONA.at, PERSONA.trackerPrivate, uuid(`ally${matchN}-3`), PERSONA.below];
+    const enemies = [PERSONA.excluded, ...Array.from({ length: 4 }, (_, i) => uuid(`enemy${matchN}-${i + 1}`))];
     const pool = [...AGENTS].sort(() => r() - 0.5);
     const agents = new Map<string, string>();
     [...allies, ...enemies].forEach((p, i) => agents.set(p, pool[i % pool.length]));
     const tiers = new Map<string, number>();
-    for (const p of [...allies, ...enemies]) tiers.set(p, stress === 'unrated' ? 0 : stress === 'radiant' ? 27 : 9 + Math.floor(r() * 14));
+    for (const p of [...allies, ...enemies]) tiers.set(p, stress === 'unrated' ? 0 : stress === 'radiant' ? 27 : (careerOf(p).find((m) => m.queue === 'competitive')?.tierAfter ?? 9 + Math.floor(r() * 14)));
     return {
       id: uuid(`match${matchN}${bootAt}`),
       n: matchN,
@@ -190,16 +212,8 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
   function history(puuid: string): HistEntry[] {
     let h = histories.get(puuid);
     if (h) return h;
-    const r = rng('hist' + puuid);
-    const count = puuid === ME ? 18 : 8;
-    h = [];
-    for (let i = 0; i < count; i++) {
-      const id = uuid(`${puuid}-h${i}`);
-      const roll = r();
-      const QueueID = puuid === ME ? (roll < 0.6 ? 'competitive' : 'unrated') : roll < 0.7 ? 'competitive' : roll < 0.85 ? 'unrated' : roll < 0.95 ? 'deathmatch' : 'swiftplay';
-      h.push({ MatchID: id, GameStartTime: bootAt - (i + 1) * 47 * 60_000, QueueID });
-      owners.set(id, puuid);
-    }
+    h = careerOf(puuid).map((m) => ({ MatchID: m.id, GameStartTime: m.start, QueueID: m.queue }));
+    for (const e of h) owners.set(e.MatchID, puuid);
     histories.set(puuid, h);
     return h;
   }
@@ -238,14 +252,24 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     firstAtk: Color,
     start: number,
     agents?: Map<string, string>,
+    forced?: { winner: Color | null; rounds: Record<Color, number>; tiers: Map<string, number>; parties: Map<string, string>; acs: Map<string, number> },
   ) {
     const swift = queue === 'swiftplay';
     const winTarget = swift ? 5 : 13;
     const half = swift ? 4 : 12;
-    const winner: Color = r() < 0.52 ? players[0].t : other(players[0].t);
-    const loserRounds = Math.floor(r() * (winTarget - 1));
-    const seq: Color[] = [...Array(winTarget - 1).fill(winner), ...Array(loserRounds).fill(other(winner))].sort(() => r() - 0.5);
-    seq.push(winner);
+    let winner: Color | null = r() < 0.52 ? players[0].t : other(players[0].t);
+    let seq: Color[];
+    if (forced) {
+      // Career match: the score and winner are fixed so RR, result and lobby agree.
+      winner = forced.winner;
+      const last: Color = winner ?? 'Blue';
+      seq = [...Array(forced.rounds[last] - 1).fill(last), ...Array(forced.rounds[other(last)]).fill(other(last))].sort(() => r() - 0.5);
+      seq.push(last);
+    } else {
+      const loserRounds = Math.floor(r() * (winTarget - 1));
+      seq = [...Array(winTarget - 1).fill(winner), ...Array(loserRounds).fill(other(winner))].sort(() => r() - 0.5);
+      seq.push(winner);
+    }
     const total = seq.length;
     const byTeam = (c: Color) => players.filter((x) => x.t === c).map((x) => x.p);
     const roundResults = seq.map((w, roundNum) => {
@@ -282,14 +306,14 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
         seasonId: 'mock-season',
       },
       players: players.map(({ p, t }) => {
-        const acs = 120 + Math.floor(r() * 210);
+        const acs = forced?.acs.get(p) ?? 120 + Math.floor(r() * 210);
         const kills = Math.round((acs / 260) * total * 0.8 + r() * 4);
         return {
           subject: p,
           gameName: nameFor(p).GameName,
           tagLine: nameFor(p).TagLine,
           teamId: t,
-          partyId: uuid('party' + p),
+          partyId: forced?.parties.get(p) ?? uuid('party' + p),
           characterId: agents?.get(p) ?? pick(r, AGENTS),
           stats: {
             score: acs * total,
@@ -299,7 +323,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
             assists: Math.floor(r() * 9),
             playtimeMillis: total * 100_000,
           },
-          competitiveTier: 12 + Math.floor(r() * 8),
+          competitiveTier: forced?.tiers.get(p) ?? 12 + Math.floor(r() * 8),
           accountLevel: 40 + Math.floor(r() * 300),
         };
       }),
@@ -333,8 +357,9 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     const owner = owners.get(matchId);
     if (!owner) return null;
     const entry = history(owner).find((h) => h.MatchID === matchId)!;
+    const c = careerById.get(matchId);
     const r = rng('det' + matchId);
-    const map = pick(r, MAPS);
+    const map = c?.map ?? pick(r, MAPS);
     if (entry.QueueID === 'deathmatch') return buildDmDetails(matchId, r, owner, map, entry.GameStartTime);
     const mine: Color = r() < 0.5 ? 'Blue' : 'Red';
     const players = [
@@ -342,7 +367,17 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       ...Array.from({ length: 4 }, (_, i) => ({ p: uuid(matchId + 'a' + i), t: mine })),
       ...Array.from({ length: 5 }, (_, i) => ({ p: uuid(matchId + 'e' + i), t: other(mine) })),
     ];
-    return buildBombDetails(matchId, r, players, map, entry.QueueID, 'Red', entry.GameStartTime);
+    if (!c) return buildBombDetails(matchId, r, players, map, entry.QueueID, 'Red', entry.GameStartTime);
+    // Lobby ranks spread around the career's lobby tier; the owner's party fills its first teammates.
+    const tiers = new Map<string, number>();
+    const parties = new Map<string, string>();
+    players.forEach(({ p }, i) => {
+      tiers.set(p, p === owner ? c.tierBefore : Math.max(3, Math.min(27, c.lobbyTier + ((i * 7) % 3) - 1)));
+      parties.set(p, i < c.partySize ? uuid(`party-${matchId}`) : uuid(`solo-${matchId}-${i}`));
+    });
+    const winner: Color | null = c.draw ? null : c.win ? mine : other(mine);
+    const rounds = { [mine]: c.myRounds, [other(mine)]: c.theirRounds } as Record<Color, number>;
+    return buildBombDetails(matchId, r, players, map, entry.QueueID, 'Red', entry.GameStartTime, undefined, { winner, rounds, tiers, parties, acs: new Map([[owner, c.acs]]) });
   }
 
   function identity(p: string, s: Scenario) {
@@ -445,7 +480,9 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     // Fixture shop mixes skins with and without streamedVideo (see scripts/make-mock-fixtures.mjs).
     const daily: string[] = mockFixtures.shop.daily;
     const price = (id: string) => mockFixtures.prices[id] ?? 1775;
-    const remaining = Math.max(60, 3 * 3600 + 17 * 60 - Math.floor((Date.now() - bootAt) / 1000));
+    // Riot's daily store resets at 00:00 UTC.
+    const now = new Date();
+    const remaining = Math.max(60, Math.ceil((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) - now.getTime()) / 1000));
     const bundleIds: string[] = mockFixtures.shop.bundle;
     const bundle = {
       ID: uuid('bundle-offer'),
@@ -466,8 +503,31 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       DurationRemainingInSeconds: 9 * 86400,
       WholesaleOnly: false,
     };
+    // A second featured bundle that rotates during the mock run (real valorant-api.com bundle ids so names
+    // and art resolve), with a card and a buddy in it like real bundles.
+    const period = process.env.MOCK_FAST === '1' ? 30_000 : 90_000;
+    const slot = Math.floor((Date.now() - bootAt) / period);
+    const rotating = ['d84cd2bf-42e5-34e8-062f-cba8d2c66fb2', 'ab83f73d-485f-e010-8ea0-24b538468a1a', '332d705c-4852-11e5-c590-88b1f6e47f72', '8a3507cd-44ef-0695-1d66-4da0f87e7522'];
+    const night: string[] = mockFixtures.shop.night;
+    const rotIds = [night[slot % night.length], night[(slot + 2) % night.length], night[(slot + 4) % night.length]];
+    const rotItem = (type: string, id: string, base: number) => ({ Item: { ItemTypeID: type, ItemID: id, Amount: 1 }, BasePrice: base, CurrencyID: VP, DiscountPercent: 0.1, DiscountedPrice: Math.round(base * 0.9), IsPromoItem: false });
+    const rotItems = [
+      ...rotIds.map((id) => rotItem('e7c63390-eda7-46e0-bb7a-a6abdacd2433', id, price(id))),
+      rotItem('3f296c07-64c3-494c-923b-fe692a4fa1bd', mockFixtures.owned.cards[slot % mockFixtures.owned.cards.length], 375),
+      rotItem('dd3bf334-87f3-40bd-b043-682a57a8dc3a', mockFixtures.owned.buddies[slot % mockFixtures.owned.buddies.length].level, 475),
+    ];
+    const second = {
+      ...bundle,
+      ID: uuid(`bundle-rot-${slot}`),
+      DataAssetID: rotating[slot % rotating.length],
+      Items: rotItems,
+      TotalBaseCost: { [VP]: rotItems.reduce((a, x) => a + x.BasePrice, 0) },
+      TotalDiscountedCost: { [VP]: rotItems.reduce((a, x) => a + x.DiscountedPrice, 0) },
+      TotalDiscountPercent: 0.1,
+      DurationRemainingInSeconds: Math.max(1, Math.ceil((bootAt + (slot + 1) * period - Date.now()) / 1000)),
+    };
     return {
-      FeaturedBundle: { Bundle: bundle, Bundles: [bundle], BundleRemainingDurationInSeconds: 9 * 86400 },
+      FeaturedBundle: { Bundle: bundle, Bundles: [bundle, second], BundleRemainingDurationInSeconds: 9 * 86400 },
       SkinsPanelLayout: {
         SingleItemOffers: daily,
         SingleItemStoreOffers: daily.map((id) => ({
@@ -554,6 +614,8 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     notFound,
     readBody,
     ENTITLEMENT,
+    career: careerOf,
+    bootAt,
   });
 
   const server = http.createServer(async (req, res) => {
@@ -561,6 +623,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     const url = new URL(req.url ?? '/', 'http://x');
     const p = url.pathname;
     const method = req.method ?? 'GET';
+    if (requests.length < 20_000) requests.push(`${method} ${p}${url.search}`);
 
     if (p.startsWith('/__mock/')) {
       if (p === '/__mock/phase') {
@@ -705,6 +768,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     },
     phase: () => phase,
     events: events!,
+    requests,
     valorantConfigDir,
     close: () =>
       new Promise<void>((resolve) => {

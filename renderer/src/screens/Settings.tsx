@@ -7,11 +7,14 @@ import { saveSettings, useSettings } from '../lib/store';
 import { Panel, Segmented, Select, Toggle } from '../components/ui';
 import { WarningCircle } from '../lib/icons';
 import { Bar, Btn, Note, PageHeader } from '../components/kit';
+import { BoostTab, StretchTab } from './SystemSettings';
 
-type Tab = 'general' | 'accounts' | 'debug';
+type Tab = 'general' | 'accounts' | 'stretch' | 'boost' | 'debug';
 const TABS: [Tab, string][] = [
   ['general', 'General'],
   ['accounts', 'Accounts'],
+  ['stretch', 'Stretch'],
+  ['boost', 'Boost'],
   ['debug', 'Diagnostics'],
 ];
 
@@ -24,6 +27,8 @@ export function SettingsScreen({ state, initialTab }: { state: AppState | null; 
       <Segmented value={tab} options={TABS} onChange={setTab} className="mb-8" />
       {tab === 'general' && <General state={state} />}
       {tab === 'accounts' && <Accounts state={state} />}
+      {tab === 'stretch' && <StretchTab />}
+      {tab === 'boost' && <BoostTab />}
       {tab === 'debug' && <Debug />}
     </div>
   );

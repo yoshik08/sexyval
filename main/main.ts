@@ -25,6 +25,13 @@ import { HubService } from './services/hub';
 import { AccountManager, REAL_AUTH_URLS, type AuthUrls } from './auth/accounts';
 import { GameLoop } from './loop';
 import { MmrService } from './services/mmr';
+import { MmrEstimateService } from './services/mmrEstimate';
+import { LifetimeService } from './services/lifetime';
+import { StoreArchive } from './services/bundles';
+import { StoreSync } from './services/storeSync';
+import { PriceScrapeService } from './services/priceScrape';
+import { createSystemServices, uninstallCleanup, type SystemServices } from './services/gameSystem';
+import os from 'node:os';
 import { OffersService } from './services/offers';
 import { RiotEvents } from './riot/events';
 import { defaultValorantConfigDir, detectDisplayMode } from './services/displayMode';
@@ -60,6 +67,26 @@ let valorantConfigDir = defaultValorantConfigDir();
 const debug = new DebugStore();
 const recentToasts = new Map<string, number>();
 const rpc: Record<string, (...args: any[]) => unknown> = {};
+/** Last work before the app exits (archives, native display, session tweaks). Awaited, max 8 s. */
+const beforeQuit: (() => Promise<void>)[] = [];
+let systems: SystemServices | null = null;
+/** Boost: SexyVal gets out of the way while Valorant runs. */
+let quiet = false;
+
+function setQuiet(on: boolean): void {
+  quiet = on;
+  win?.webContents.setBackgroundThrottling(on || !SHOTS);
+  const level = on ? os.constants.priority.PRIORITY_BELOW_NORMAL : os.constants.priority.PRIORITY_NORMAL;
+  for (const m of app.getAppMetrics()) {
+    try {
+      os.setPriority(m.pid, level);
+    } catch {
+      // a process that just exited
+    }
+  }
+  send('quiet', on);
+  log.info(`quiet mode ${on ? 'on' : 'off'}`);
+}
 let resume: ResumeStore | null = null;
 let resumed: ResumeFile | null = null;
 let updater: AppUpdater | null = null;
@@ -155,6 +182,10 @@ function createWindow(): BrowserWindow {
     const b = maximized ? getSettings().window : w.getNormalBounds();
     updateSettings({ window: { width: b.width, height: b.height, x: b.x, y: b.y, maximized } });
   };
+  // Boost quiet mode: a minimized window goes to the tray while Valorant runs.
+  w.on('minimize', () => {
+    if (quiet && tray) w.hide();
+  });
   w.on('resize', saveBounds);
   w.on('move', saveBounds);
   w.on('close', (e) => {
@@ -256,6 +287,17 @@ async function startServices(): Promise<void> {
   const sendPrices = () => send('prices', prices.quotes(catalog.catalog, offers.prices(catalog.catalog)));
   const prices = new PriceBook(dataDir('prices.json'), () => sendPrices());
   await prices.load();
+  // Wiki prices re-scraped once per game version (user data folder); the bundled list is the fallback.
+  const priceScrape = new PriceScrapeService(dataDir('skin-prices.json'), (l) => prices.setList(l));
+  await priceScrape.load();
+  const archive = new StoreArchive(dataDir());
+  await archive.load();
+  beforeQuit.push(() => archive.flush());
+  if (MOCK) {
+    const { mockShopHistory } = await import('../mock/shopSeed');
+    archive.seedDays(mockShopHistory());
+  }
+  let storeSync: StoreSync | null = null;
   const offers = new OffersService(dataDir('offers.json'), MOCK && mock ? `${mock.base}/henrik` : 'https://api.henrikdev.xyz', () => getSettings().henrikKey, () => sendPrices(), onRaw);
   await offers.load();
   let reportedFor = '';
@@ -289,6 +331,7 @@ async function startServices(): Promise<void> {
       onLoaded: (v) => {
         prices.record(v);
       },
+      onRaw: (sf, puuid) => storeSync?.ingestActive(sf, puuid),
       afterRefresh: (walletChanged) => {
         if (walletChanged) void owned.refresh(); // purchase likely: refresh owned items
       },
@@ -296,11 +339,27 @@ async function startServices(): Promise<void> {
     dataDir('wishlist.json'),
   );
   await shop.loadWishlist();
+  const shopRef = shop;
+  storeSync = new StoreSync({
+    api,
+    archive,
+    shop: shopRef,
+    assets,
+    prices,
+    accounts,
+    activePuuid: () => session.puuid,
+    activeLabel: () => session.accountLabel ?? (session.puuid ? (names.get(session.puuid) ? `${names.get(session.puuid)!.name}#${names.get(session.puuid)!.tag}` : 'Riot Client account') : 'account'),
+    onNewBundles: (list) => notify('New bundle in the store', list.map((b) => b.name ?? 'Featured bundle').join(', ')),
+    onChange: () => send('store-archive', Date.now()),
+  });
   const progression = new ProgressionService(api, catalog, assets);
   const party = new PartyService(api, assets, catalog, names);
   const loadout = new LoadoutService(api, dataDir('loadout-presets.json'), () => void owned.refresh());
   const profiles = new ProfileService(api, assets, catalog, history, names);
   const mmr = new MmrService(api, assets, catalog, () => emitLater());
+  const hiddenInMatch = (p: string) => loop?.isHidden(p) ?? false;
+  const mmrEstimate = new MmrEstimateService(api, assets, catalog, history, names, profiles, dataDir('mmr-updates'), hiddenInMatch);
+  const lifetime = new LifetimeService(api, assets, catalog, history, profiles, hiddenInMatch);
   const hub = new HubService(api, assets, catalog, dataDir('lineups.json'), dataDir('lineups'));
   handleLocal(dataDir('lineups'));
 
@@ -315,13 +374,17 @@ async function startServices(): Promise<void> {
       send('state', s);
       overlay.update(s);
       onPhase(s);
+      onVersion(s.conn.version);
     },
     toast,
     mock: MOCK,
     pollMs: () => Number(process.env.SEXYVAL_POLL_MS) || (MOCK ? 2000 : getSettings().pollMs),
     mmr,
     eventsState: () => events?.state ?? 'off',
-    onAccount: (puuid) => owned.ensure(puuid),
+    onAccount: (puuid) => {
+      owned.ensure(puuid);
+      void storeSync?.syncOthers('tokens');
+    },
     onNoTokens: () => {
       if (owned.state.status !== 'signed-out') owned.signedOut();
     },
@@ -338,6 +401,28 @@ async function startServices(): Promise<void> {
     () => loop?.requestEmit(),
   );
   events.start();
+
+  storeSync.start();
+
+  // A new game version: fresh catalog (new skins, bundle names, art), every account's store, and one
+  // wiki price scrape for that version. None of it blocks the UI; failures keep what was there.
+  let seenVersion = '';
+  function onVersion(v: string | undefined): void {
+    if (!v || v === seenVersion) return;
+    const changed = !!seenVersion;
+    seenVersion = v;
+    const followUp = () => {
+      // Boost quiet mode: heavy background work waits until Valorant closes (the store fetch never waits).
+      if (quiet) return void setTimeout(followUp, 60_000);
+      if (!MOCK || process.env.SEXYVAL_SCRAPE === '1') priceScrape.ensure(v);
+      if (changed) void catalog.load(true);
+    };
+    followUp();
+    if (!changed) return;
+    log.info(`game version changed to ${v}`);
+    shop?.clearBundleNames();
+    void storeSync?.syncAll('game update');
+  }
 
   // Tray text + display-mode check follow the phase.
   let lastPhaseKey = '';
@@ -394,6 +479,8 @@ async function startServices(): Promise<void> {
       if (!url) throw new Error('bad Riot ID');
       return shell.openExternal(url);
     },
+    'store:bundles': () => archive.bundles(),
+    'store:history': () => archive.days(),
     'wishlist:get': () => shop?.wishlistIds ?? [],
     'wishlist:toggle': (id: unknown) => shop?.toggleWish(str(id, 64)),
     'overlay:displays': () => listDisplays(),
@@ -440,6 +527,9 @@ async function startServices(): Promise<void> {
     'loadout:deletePreset': (id: unknown) => loadout.deletePreset(str(id, 64)),
     'profile:get': (q: unknown, queue: unknown) => profiles.profile(str(q, 64), { count: 15, queue: typeof queue === 'string' ? queue : getSettings().historyQueue }),
     'profile:match': (id: unknown) => profiles.matchDetail(str(id, 64)),
+    'mmr:get': (q: unknown, force: unknown) => mmrEstimate.get(str(q, 64), force === true),
+    'mmr:chip': (p: unknown) => mmrEstimate.chip(str(p, 64)),
+    'lifetime:get': (p: unknown, count: unknown) => lifetime.get(str(p, 64), Number(count) || 20),
     'hub:friends': () => hub.friends(),
     'hub:friendRequest': (nt: unknown) => hub.sendFriendRequest(str(nt, 64)),
     'hub:cancelRequest': (p: unknown) => hub.cancelFriendRequest(str(p, 64)),
@@ -459,7 +549,34 @@ async function startServices(): Promise<void> {
     'update:openReleases': () => shell.openExternal(RELEASES_URL),
   });
 
+  // Stretch + Boost (Settings tabs). Mock: dry-run helper, pretend Windows, the mock's phase as the game.
+  systems = await createSystemServices({
+    mock: MOCK,
+    mockGameRunning: () => !!mock && mock.phase() !== 'offline' && mock.phase() !== 'noval',
+    dataDir,
+    configDir: valorantConfigDir,
+    settings: getSettings,
+    setQuiet,
+    onStretch: (s) => send('stretch', s),
+    onBoost: (s) => send('boost', s),
+  });
+  const sys = systems;
+  beforeQuit.push(async () => {
+    await sys.stretch.shutdown();
+    await sys.boost.shutdown();
+    sys.game.stop();
+  });
+  Object.assign(rpc, {
+    'stretch:status': () => sys.stretch.status,
+    'stretch:monitors': () => sys.stretch.refreshMonitors().then(() => sys.stretch.status),
+    'boost:status': () => sys.boost.emit(),
+    'boost:preset': () => sys.boost.applyPreset(),
+    'boost:restorePreset': () => sys.boost.restorePreset(),
+  });
+
   onSettings((s, prev) => {
+    void sys.stretch.onSettings(s, prev);
+    if (s.boostEnabled !== prev.boostEnabled || JSON.stringify(s.boostTweaks) !== JSON.stringify(prev.boostTweaks)) sys.boost.onSettings();
     if (s.appIcon !== prev.appIcon) {
       applyAppIcon(win, s.appIcon, iconPath());
       tray?.setImage(nativeImage.createFromPath(iconPath()).resize({ width: 16, height: 16 }));
@@ -533,11 +650,18 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.themeSource = 'dark';
     app.setAppUserModelId(APP_ID);
     await loadSettings();
+    // Run by the NSIS uninstaller (build/installer.nsh): undo Stretch and Boost, remove the helper task, exit.
+    if (process.argv.includes('--sexyval-uninstall')) {
+      const s = await createSystemServices({ mock: false, dataDir, configDir: valorantConfigDir, settings: getSettings, setQuiet: () => undefined, onStretch: () => undefined, onBoost: () => undefined });
+      await uninstallCleanup(s);
+      app.exit(0);
+      return;
+    }
     resume = new ResumeStore(dataDir('resume.json'));
     resumed = await resume.consume().catch(() => null);
     handleApp(path.join(app.getAppPath(), 'dist-renderer'));
     handleAssets(dataDir('assets', 'img'));
-    handleVideos({ dir: dataDir('videos'), cacheEnabled: () => getSettings().cacheVideos, maxBytes: () => getSettings().videoCacheMaxMb * MB });
+    handleVideos({ dir: dataDir('videos'), cacheEnabled: () => getSettings().cacheVideos && !quiet, maxBytes: () => getSettings().videoCacheMaxMb * MB });
     registerIpc();
     win = createWindow();
     applyAppIcon(win, getSettings().appIcon, iconPath()); // re-apply the saved choice (shortcuts may have been recreated by an update)
@@ -577,7 +701,16 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 
-  app.on('before-quit', () => {
+  let cleanedUp = false;
+  app.on('before-quit', (e) => {
+    // Native display and session tweaks must be back before the process ends: finish them first.
+    if (!cleanedUp && beforeQuit.length) {
+      e.preventDefault();
+      cleanedUp = true;
+      const all = Promise.all(beforeQuit.map((f) => f().catch((err) => log.warn('quit cleanup', err))));
+      void Promise.race([all, new Promise((r) => setTimeout(r, 8000))]).finally(() => app.quit());
+      return;
+    }
     overlay.destroy();
     quitting = true;
     loop?.stop();

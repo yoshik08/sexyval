@@ -240,6 +240,35 @@ export interface Settings {
   liveDensity: LiveDensity;
   /** Silent background updates (installed build only; the portable build can't self-update). */
   autoUpdate: boolean;
+  /** Stretched resolution while Valorant runs (Settings → Stretch). */
+  stretchEnabled: boolean;
+  stretchRes: { w: number; h: number };
+  /** Display device name (\\.\DISPLAY1); null = primary. */
+  stretchDevice: string | null;
+  stretchNativeOnAltTab: boolean;
+  /** Game boost (Settings → Boost): master switch and each tweak. */
+  boostEnabled: boolean;
+  boostTweaks: Record<string, boolean>;
+}
+
+export interface StretchStatus {
+  line: string;
+  error?: string;
+  phase: 'off' | 'idle' | 'stretched' | 'native-alt-tab';
+  monitors: { device: string; name: string; primary: boolean; current: { w: number; h: number; hz: number }; modes: { w: number; h: number; hz: number }[] }[];
+  dryRun: boolean;
+}
+
+export interface BoostStatus {
+  enabled: boolean;
+  gameRunning: boolean;
+  tweaks: { id: string; label: string; scope: 'session' | 'persistent'; admin: boolean; on: boolean; applied: boolean; note?: string; error?: string }[];
+  /** Hardware-accelerated GPU scheduling as Windows reports it now. */
+  hags?: 'on' | 'off' | 'unknown';
+  /** The elevated helper task exists (one UAC prompt to create it). */
+  elevatedReady: boolean;
+  preset: { canApply: boolean; hasBackup: boolean; message?: string };
+  dryRun: boolean;
 }
 
 export type LiveDensity = 'auto' | 'compact' | 'detailed';
@@ -272,7 +301,7 @@ export interface Toast {
   at: number;
 }
 
-export type View = 'live' | 'shop' | 'collection' | 'progress' | 'party' | 'loadout' | 'profiles' | 'hub' | 'settings';
+export type View = 'live' | 'shop' | 'collection' | 'progress' | 'party' | 'loadout' | 'profiles' | 'mmr' | 'hub' | 'settings';
 
 export interface SexyValApi {
   getState(): Promise<AppState>;

@@ -6,13 +6,14 @@ import { api } from '../lib/api';
 import { countdown, cx, fmtNum, useNow } from '../lib/format';
 import { ArrowClockwise, Storefront } from '../lib/icons';
 import { countTo, staggerIn } from '../lib/motion';
-import { useCatalog, useSettings } from '../lib/store';
+import { useCatalog, usePreviews } from '../lib/store';
 import { ErrorNote } from '../components/kit';
 import { Img, Segmented, Skeleton } from '../components/ui';
 import { SkinTile, type TileData } from '../components/SkinTile';
 import { openSkin } from '../components/SkinDetail';
+import { PastBundles, ShopCalendar } from './StoreArchive';
 
-type Tab = 'daily' | 'bundles' | 'night';
+type Tab = 'daily' | 'bundles' | 'night' | 'past' | 'history';
 
 /** A currency in the wallet: the number eases to its new value when a purchase or refresh changes it. */
 function Balance({ value, label, dot }: { value: number; label: string; dot: string }) {
@@ -42,13 +43,13 @@ function ShopPrice({ item, sale }: { item: ShopItem; sale?: boolean }) {
   );
 }
 
-export function ShopScreen({ initialTab, connected }: { initialTab: Tab; connected: boolean }) {
+export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab; connected: boolean; myPuuid?: string }) {
   const [shop, setShop] = useState<ShopView | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab);
   const now = useNow(1000);
   const grid = useRef<HTMLDivElement>(null);
   const catalog = useCatalog();
-  const settings = useSettings();
+  const previews = usePreviews();
   const skinById = useMemo(() => new Map<string, CatalogSkin>(catalog.skins.map((s) => [s.id, s])), [catalog.skins]);
   const weaponName = useMemo(() => new Map(catalog.weapons.map((w) => [w.id, w.name])), [catalog.weapons]);
 
@@ -69,6 +70,8 @@ export function ShopScreen({ initialTab, connected }: { initialTab: Tab; connect
   const options: [Tab, string][] = [['daily', 'Daily']];
   if (bundles.length) options.push(['bundles', bundles.length > 1 ? `Bundles · ${bundles.length}` : 'Bundle']);
   if (night) options.push(['night', 'Night Market']);
+  options.push(['past', 'Past bundles'], ['history', 'History']);
+  const archive = active === 'past' || active === 'history';
 
   const tile = (i: ShopItem, source: string, sale?: boolean): TileData => {
     const sk = i.skinId ? skinById.get(i.skinId) : undefined;
@@ -90,7 +93,7 @@ export function ShopScreen({ initialTab, connected }: { initialTab: Tab; connect
   const open = (i: ShopItem, source: string) => (art: HTMLElement | null) => i.skinId && openSkin(i.skinId, { price: i.cost || undefined, basePrice: i.baseCost, discountPercent: i.discountPercent, source }, art);
   const cell = (i: ShopItem, source: string, sale?: boolean, h = 'h-[318px]') => (
     <div key={i.offerId} data-row className={h}>
-      <SkinTile t={tile(i, source, sale)} onOpen={open(i, source)} previews={settings?.hoverPreviews ?? true} />
+      <SkinTile t={tile(i, source, sale)} onOpen={open(i, source)} previews={previews} />
     </div>
   );
 
@@ -98,8 +101,8 @@ export function ShopScreen({ initialTab, connected }: { initialTab: Tab; connect
     <div className="mx-auto max-w-[1240px] px-6 xl:px-10 pb-20 pt-6">
       <div className="flex items-end justify-between gap-8">
         <div>
-          <h1 className="t-title text-page">{active === 'night' ? 'Night Market' : active === 'bundles' ? 'Bundles' : 'Daily Store'}</h1>
-          <p className="num mt-1.5 h-5 text-sm text-muted">{endsAt ? <>Resets in {countdown(endsAt - now)}</> : null}</p>
+          <h1 className="t-title text-page">{active === 'night' ? 'Night Market' : active === 'bundles' ? 'Bundles' : active === 'past' ? 'Past bundles' : active === 'history' ? 'Store history' : 'Daily Store'}</h1>
+          <p className="num mt-1.5 h-5 text-sm text-muted">{archive ? 'Every store SexyVal has seen, kept after it rotates.' : endsAt ? <>Resets in {countdown(endsAt - now)}</> : null}</p>
         </div>
         <div className="flex shrink-0 items-center gap-5 xl:gap-7">
           {shop?.wallet ? (
@@ -126,9 +129,13 @@ export function ShopScreen({ initialTab, connected }: { initialTab: Tab; connect
       {options.length > 1 && <Segmented className="mt-6" value={active} options={options} onChange={setTab} />}
 
       <div className="mt-6">
-        {shop?.status === 'error' && <ErrorNote>{shop.error}</ErrorNote>}
+        {shop?.status === 'error' && !archive && <ErrorNote>{shop.error}</ErrorNote>}
 
-        {!connected && !shop?.daily.length ? (
+        {active === 'past' ? (
+          <PastBundles />
+        ) : active === 'history' ? (
+          <ShopCalendar myPuuid={myPuuid} />
+        ) : !connected && !shop?.daily.length ? (
           <div className="mt-6 flex flex-col items-center rounded-[28px] bg-surface px-8 py-20 text-center ring-1 ring-inset ring-white/[0.06]">
             <Storefront size={36} weight="duotone" className="text-faint" />
             <h2 className="t-head mt-4 text-lg">Your store needs the Riot Client</h2>

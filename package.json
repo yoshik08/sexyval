@@ -1,7 +1,7 @@
 {
   "name": "sexyval",
   "productName": "SexyVal",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "description": "SexyVal",
   "main": "dist-electron/main/main.js",
   "author": "yoshik",
@@ -10,18 +10,19 @@
   "scripts": {
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
-    "build": "npm run build:main && npm run build:renderer",
+    "build": "npm run build:helper && npm run build:main && npm run build:renderer",
     "start": "npm run build && node scripts/run-electron.mjs",
     "mock": "npm run build && node scripts/run-electron.mjs MOCK=1",
     "mock:server": "npm run build:main && node dist-electron/mock/standalone.js",
     "screenshots": "npm run build && node scripts/run-electron.mjs MOCK=1 SEXYVAL_SCREENSHOTS=screenshots",
     "icon": "node scripts/make-icon.mjs",
+    "build:helper": "node scripts/build-helper.mjs",
     "mock:update": "node scripts/mock-update-server.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "check": "npm run lint && npm run typecheck && npm run test",
-    "dist": "npm run icon && npm run build && electron-builder --win"
+    "dist": "npm run icon && npm run build:helper && npm run build && electron-builder --win"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

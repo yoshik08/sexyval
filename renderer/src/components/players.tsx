@@ -4,9 +4,11 @@ import type { LiveDensity, MatchSummary, PlayerRow, RankInfo } from '../../../sh
 import { trackerUrl } from '../../../shared/tracker';
 import { api } from '../lib/api';
 import { cx, kd } from '../lib/format';
-import { ArrowSquareOut, ArrowUp } from '../lib/icons';
+import { ArrowRight, ArrowSquareOut, ArrowUp } from '../lib/icons';
 import { expandTo } from '../lib/motion';
+import { openPlayer } from '../lib/store';
 import { Img, Skeleton } from './ui';
+import { LifetimeLine, MmrChip } from './lifetime';
 
 export const isHidden = (p: PlayerRow) => p.incognito && !p.isMe;
 
@@ -320,8 +322,56 @@ function Stat({ k, v, row }: { k: string; v: ReactNode; row?: boolean }) {
   );
 }
 
-/** Expanded content: rank names, peak act, score breakdown, last 5 as mini rows, tracker.gg. */
-export function PlayerDetail({ p, narrow }: { p: PlayerRow; narrow?: boolean }) {
+/** Lifetime line + Estimated MMR + full profile: mounted only once the row has been opened, so nothing is fetched for closed rows. */
+function OpenedExtras({ p, open, narrow }: { p: PlayerRow; open?: boolean; narrow?: boolean }) {
+  // Rows that start open (Detailed density) wait for a click: lifetime is never fetched for a whole roster.
+  const startedOpen = useRef(!!open);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    if (open && !startedOpen.current) setSeen(true);
+    if (!open) startedOpen.current = false;
+  }, [open]);
+  if (!open && !seen) return null;
+  if (!seen) {
+    return (
+      <div>
+        <button
+          type="button"
+          data-no-toggle
+          onClick={(e) => {
+            e.stopPropagation();
+            setSeen(true);
+          }}
+          className="press inline-flex h-7 items-center rounded-full bg-white/[0.08] px-2.5 text-xs font-medium text-ink hover:bg-white/[0.14]"
+        >
+          Show lifetime and estimated MMR
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <LifetimeLine puuid={p.puuid} />
+      <div className={cx('flex flex-wrap gap-2', narrow && 'flex-col items-start')}>
+        <MmrChip puuid={p.puuid} />
+        <button
+          type="button"
+          data-no-toggle
+          onClick={(e) => {
+            e.stopPropagation();
+            openPlayer('profiles', p.puuid);
+          }}
+          className="press inline-flex h-7 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-xs font-medium text-ink hover:bg-white/[0.14]"
+        >
+          Full profile <ArrowRight size={12} weight="bold" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Expanded content: rank names, peak act, score breakdown, last 5 as mini rows, lifetime line, tracker.gg. */
+export function PlayerDetail({ p, narrow, open }: { p: PlayerRow; narrow?: boolean; open?: boolean }) {
   if (isHidden(p)) {
     return <div className="px-1 pb-1 pt-2 text-xs text-faint">Hidden player: SexyVal doesn’t look up their name, history or rank.</div>;
   }
@@ -382,6 +432,7 @@ export function PlayerDetail({ p, narrow }: { p: PlayerRow; narrow?: boolean }) 
           ))}
         </div>
       )}
+      <OpenedExtras p={p} open={open} narrow={narrow} />
       <div>
         <TrackerButton p={p} compact={narrow} />
       </div>

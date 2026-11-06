@@ -3,9 +3,10 @@ import type { AppState, Connection, View } from '../../shared/types';
 import type { UiResumeState } from '../../shared/update';
 import { api } from './lib/api';
 import { cx } from './lib/format';
-import { Broadcast, Compass, Crosshair, GearSix, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
+import { Broadcast, Compass, Crosshair, Gauge, GearSix, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
 import { withViewTransition } from './lib/motion';
-import { startStores, useLoadoutDirty, useSettings, useVideoPlaying } from './lib/store';
+import { playerNavStore, startStores, useLoadoutDirty, useSettings, useStore, useVideoPlaying } from './lib/store';
+import { MmrScreen } from './screens/Mmr';
 import { Toasts } from './components/ui';
 import { closeSkin, SkinDetail } from './components/SkinDetail';
 import { Btn } from './components/kit';
@@ -31,6 +32,7 @@ const GROUPS: NavItem[][] = [
   [
     { id: 'progress', label: 'Missions', Icon: Target },
     { id: 'profiles', label: 'Profiles', Icon: UserCircle },
+    { id: 'mmr', label: 'MMR', Icon: Gauge },
     { id: 'party', label: 'Party', Icon: UsersThree },
     { id: 'hub', label: 'Hub', Icon: Compass },
   ],
@@ -162,7 +164,10 @@ export function App() {
   const [view, setView] = useState<View>('live');
   const [sub, setSub] = useState<string | undefined>();
   const [profileQuery, setProfileQuery] = useState<string | undefined>();
+  const [profileTab, setProfileTab] = useState<'history' | 'lifetime' | undefined>();
+  const [mmrQuery, setMmrQuery] = useState<string | undefined>();
   const [alert, setAlert] = useState<Alert | null>(null);
+  const playerNav = useStore(playerNavStore);
   const settings = useSettings();
   const videoPlaying = useVideoPlaying();
   const loadoutDirty = useLoadoutDirty();
@@ -176,8 +181,15 @@ export function App() {
     const offNav = api.onNav((v) => {
       const [main, tab] = v.split(':') as [View, string | undefined];
       closeSkin();
+      // "mmr:<puuid>" / "profiles:<puuid>" open that player (tray, screenshots).
+      const isId = !!tab && /^[0-9a-f-]{36}$/i.test(tab);
+      if (main === 'mmr' && isId) setMmrQuery(tab);
+      if (main === 'profiles' && isId) {
+        setProfileQuery(tab);
+        setProfileTab('lifetime');
+      }
       setView(main);
-      setSub(tab);
+      setSub(isId ? undefined : tab);
     });
     const offAlert = api.on<Alert>('alert', setAlert);
     // After a silent update relaunch: the window and tab it last showed, restored once.
@@ -227,8 +239,21 @@ export function App() {
     });
   };
 
+  // A Live row's "Full profile" / "Estimated MMR" opens that player by PUUID (no Name#Tag round-trip).
+  useEffect(() => {
+    if (!playerNav) return;
+    if (playerNav.view === 'mmr') setMmrQuery(playerNav.query);
+    else {
+      setProfileQuery(playerNav.query);
+      setProfileTab('lifetime');
+    }
+    go(playerNav.view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerNav?.n]);
+
   const connected = state?.conn.status === 'connected';
   const valorant = !!state?.conn.valorant;
+  const matchPlayers = [...(state?.pregame?.allies ?? []), ...(state?.coregame?.myTeam ?? []), ...(state?.coregame?.enemyTeam ?? [])];
 
   return (
     <div className="flex h-full">
@@ -238,12 +263,13 @@ export function App() {
         <div className="drag absolute inset-x-0 top-0 z-20 h-10 pr-[148px]" />
         <div ref={scrollRef} className={cx('h-full pt-10 [scrollbar-gutter:stable]', view === 'collection' ? 'overflow-hidden' : 'overflow-y-auto')}>
           {view === 'live' && <LiveScreen state={state} onLoadout={() => go('loadout')} />}
-          {view === 'shop' && <ShopScreen initialTab={sub === 'night' ? 'night' : sub === 'bundles' ? 'bundles' : 'daily'} connected={connected} />}
+          {view === 'shop' && <ShopScreen initialTab={sub === 'night' || sub === 'bundles' || sub === 'past' || sub === 'history' ? sub : 'daily'} connected={connected} myPuuid={state?.conn.puuid} />}
           {view === 'collection' && <CollectionScreen />}
           {view === 'loadout' && <LoadoutScreen connected={connected} />}
           {view === 'progress' && <ProgressScreen connected={connected} />}
           {view === 'party' && <PartyScreen connected={connected} valorant={valorant} />}
-          {view === 'profiles' && <ProfilesScreen connected={connected} myPuuid={state?.conn.puuid} initialQuery={profileQuery} historyQueue={settings?.historyQueue ?? ''} />}
+          {view === 'profiles' && <ProfilesScreen connected={connected} myPuuid={state?.conn.puuid} initialQuery={profileQuery} initialTab={profileTab} historyQueue={settings?.historyQueue ?? ''} />}
+          {view === 'mmr' && <MmrScreen connected={connected} myPuuid={state?.conn.puuid} initialQuery={mmrQuery} players={matchPlayers} />}
           {view === 'hub' && (
             <HubScreen
               connected={connected}
@@ -251,6 +277,7 @@ export function App() {
               initialTab={sub as any}
               onProfile={(q) => {
                 setProfileQuery(q);
+                setProfileTab('history');
                 go('profiles');
               }}
             />

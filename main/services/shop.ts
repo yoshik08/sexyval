@@ -4,6 +4,7 @@ import type { AssetService } from './assets';
 import { httpRequest, HttpError } from '../riot/http';
 import { assetUrl } from './assets';
 import { readJson, writeJson } from '../paths';
+import { nextFetchAt } from '../../shared/storeArchive';
 import { log } from '../log';
 
 export const VP = '85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741';
@@ -97,6 +98,8 @@ export interface ShopHooks {
   onWishlistHit: (names: string[]) => void;
   /** Fresh storefront parsed and decorated (feeds the price book). */
   onLoaded?: (view: ShopView) => void;
+  /** The raw storefront JSON for this account (feeds the bundle archive and shop history). */
+  onRaw?: (sf: any, puuid: string) => void;
   /** Called after any successful refresh (owned items may have changed after a purchase). */
   afterRefresh: (walletChanged: boolean) => void;
 }
@@ -146,13 +149,24 @@ export class ShopService {
     this.puuid = null;
   }
 
-  private async bundleName(id: string): Promise<{ name: string; icon?: string }> {
+  /** Cached valorant-api bundle name/art, if known. */
+  bundleInfo(id: string): { name: string; icon?: string } | undefined {
+    return this.bundleNames.get(id);
+  }
+
+  /** After a game update: new bundles get their names from a fresh lookup. */
+  clearBundleNames(): void {
+    for (const [k, v] of this.bundleNames) if (v.name === 'Featured bundle') this.bundleNames.delete(k);
+  }
+
+  async bundleName(id: string): Promise<{ name: string; icon?: string }> {
     const hit = this.bundleNames.get(id);
     if (hit) return hit;
     try {
       const r = await httpRequest(`https://valorant-api.com/v1/bundles/${id}`, { timeoutMs: 10000 });
       const v = { name: r.json?.data?.displayName ?? 'Featured bundle', icon: assetUrl(r.json?.data?.displayIcon) };
-      this.bundleNames.set(id, v);
+      // A 404 (bundle newer than valorant-api.com) is retried after the next game update, not cached for good.
+      if (r.status === 200) this.bundleNames.set(id, v);
       return v;
     } catch {
       return { name: 'Featured bundle' };
@@ -237,6 +251,7 @@ export class ShopService {
       };
       this.decorate();
       this.hooks.onLoaded?.(this.view);
+      this.hooks.onRaw?.(res.json, puuid);
       this.checkWishlist();
       this.schedule();
       this.hooks.afterRefresh(prevVp != null && this.view.wallet?.vp !== prevVp);
@@ -263,11 +278,12 @@ export class ShopService {
     this.hooks.onWishlistHit(hits.map((h) => h.name));
   }
 
+  /** A minute after the next daily / bundle / night market rotation, and at least hourly (shared/storeArchive.ts). */
   private schedule(): void {
     if (this.timer) clearTimeout(this.timer);
-    const ends = [this.view.dailyEndsAt, this.view.night?.endsAt].filter((x): x is number => !!x);
-    if (!ends.length) return;
-    const delay = Math.min(Math.max(Math.min(...ends) - Date.now() + 5000, 10_000), 2 ** 31 - 1);
+    const now = Date.now();
+    const ends = [this.view.dailyEndsAt, this.view.night?.endsAt, ...(this.view.bundles ?? []).map((b) => b.endsAt)];
+    const delay = Math.min(Math.max(nextFetchAt(now, ends, this.view.fetchedAt ?? now) - now, 10_000), 2 ** 31 - 1);
     this.timer = setTimeout(() => void this.refresh(), delay);
   }
 }

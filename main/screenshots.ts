@@ -2,6 +2,7 @@ import type { BrowserWindow, WebContents } from 'electron';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import type { MockHandle, MockPhase } from '../mock/server';
+import { PERSONA } from '../mock/career';
 import { log } from './log';
 
 interface Step {
@@ -44,7 +45,19 @@ const STEPS: Step[] = [
   { name: '16-hub-friends', nav: 'hub:friends', wait: 3500 },
   { name: '17-hub-leaderboard', nav: 'hub:leaderboard', wait: 3500 },
   { name: '18-hub-agents', nav: 'hub:agents', wait: 3500 },
-  { name: '19-live-idle', phase: 'idle', nav: 'live', wait: 7000 },
+  // 1.3: estimated MMR per persona (you: well above rank), lifetime profiles, store archive + calendar.
+  { name: '27a-mmr-above-rank', nav: 'mmr', wait: 7000, check: `document.querySelector('[data-mmr] .t-title')?.textContent` },
+  { name: '27b-mmr-graph-hover', wait: 1200, js: `(() => { const s = document.querySelector('[data-mmr] svg[role=img]'); if (!s) return; const r = s.getBoundingClientRect(); s.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: r.left + r.width * 0.7, clientY: r.top + r.height / 2 })); s.scrollIntoView({ block: 'center' }); })();` },
+  { name: '27c-mmr-at-rank', nav: `mmr:${PERSONA.at}`, wait: 6000 },
+  { name: '27d-mmr-below-rank', nav: `mmr:${PERSONA.below}`, wait: 6000 },
+  { name: '27e-mmr-mostly-excluded', nav: `mmr:${PERSONA.excluded}`, wait: 6000, js: `setTimeout(() => document.querySelector('[data-mmr] > section:last-of-type')?.scrollIntoView({ block: 'end' }), 4000);` },
+  { name: '28a-lifetime-tracker-private', nav: `profiles:${PERSONA.trackerPrivate}`, wait: 11000, check: `document.querySelector('[data-lifetime]') ? 'lifetime shown' : 'no lifetime'` },
+  { name: '28b-lifetime-matches', wait: 1500, js: `document.querySelector('[data-lifetime] > section:last-of-type')?.scrollIntoView({ block: 'end' });` },
+  { name: '29a-shop-past-bundles', nav: 'shop:past', wait: 5000 },
+  { name: '29b-shop-history-calendar', nav: 'shop:history', wait: 4000 },
+  { name: '29c-shop-history-search', wait: 1500, js: `(() => { const i = document.querySelector('[data-calendar] input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, 'va'); i.dispatchEvent(new Event('input', { bubbles: true })); })();` },
+  { name: '29d-shop-history-day', wait: 1800, js: `(() => { const i = document.querySelector('[data-calendar] input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, ''); i.dispatchEvent(new Event('input', { bubbles: true })); setTimeout(() => [...document.querySelectorAll('[data-calendar] [role=gridcell]')].reverse().find((c) => /VP/.test(c.getAttribute('aria-label') || ''))?.click(), 200); })();` },
+  { name: '19-live-idle', phase: 'idle', nav: 'live', wait: 7000, js: ESC },
   { name: '19b-live-queue', phase: 'queue', elapsed: 83, nav: 'live', wait: 3500, check: `document.querySelector('[data-queue-time]')?.textContent` },
   { name: '20-party', nav: 'party', wait: 4500 },
   // Queue pops: the overlay shows "Match found" before the map is known (the mock fills MapID after 1.5 s).
@@ -52,15 +65,23 @@ const STEPS: Step[] = [
   { name: '21-agent-select', phase: 'pregame', elapsed: 22, nav: 'live', wait: 7000 },
   { name: '21b-agent-select-overlay', wait: 1200, overlay: true },
   { name: '21c-agent-select-overlay-small', wait: 1200, overlay: true, js: setS({ overlayScale: 'small' }) },
-  { name: '21d-agent-select-expanded', nav: 'live', wait: 1500, js: `${setS({ overlayScale: 'medium' })} const c = document.querySelectorAll('[data-row][role=button]')[1]; c?.click(); setTimeout(() => c?.scrollIntoView({ block: 'end' }), 450);` },
+  { name: '21d-agent-select-expanded', nav: 'live', wait: 5000, js: `${setS({ overlayScale: 'medium' })} const c = document.querySelectorAll('[data-row][role=button]')[1]; c?.click(); setTimeout(() => c?.scrollIntoView({ block: 'end' }), 450);` },
   { name: '22-in-game', phase: 'ingame', nav: 'live', wait: 10000, check: `[...document.querySelectorAll('[data-score]')].map((e) => e.textContent.slice(0, 4)).join(' ')` },
   { name: '22b-in-game-expanded', wait: 1500, js: `document.querySelectorAll('.ig-team [data-row][role=button]')[1]?.click();` },
   { name: '22c-in-game-detailed', wait: 1800, js: clickTab('Detailed') },
   { name: '22d-in-game-score-tip', wait: 1200, js: `${clickTab('Compact')} setTimeout(() => document.querySelectorAll('.ig-team [data-score]')[6]?.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })), 500);` },
+  // Enemy row (the "excluded" persona): lifetime line + estimated MMR chip load only once the row is opened.
+  { name: '22e-in-game-enemy-lifetime', wait: 5000, js: `document.querySelectorAll('.ig-team')[1]?.querySelector('[data-row][role=button]')?.click();` },
   { name: '23-settings', nav: 'settings:general', wait: 3000, js: setS({ liveDensity: 'auto' }), check: `!!document.querySelector('[data-fullscreen-note]')` },
   { name: '24-settings-accounts', nav: 'settings:accounts', wait: 6000, js: `[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sign in with Riot'))?.click();` },
   { name: '25-settings-price-source', nav: 'settings:accounts', wait: 3000, js: TYPE_KEY },
   { name: '26-debug', nav: 'settings:debug', wait: 2500 },
+  // Mock: the helper runs with --dry-run (the real display never changes) and Boost writes to a pretend Windows.
+  { name: '30a-settings-stretch', phase: 'ingame', nav: 'settings:stretch', wait: 3500, js: `setTimeout(() => document.querySelector('[data-stretch] [role=switch]')?.click(), 600);`, check: `document.querySelector('[data-stretch-status]')?.textContent` },
+  { name: '30b-settings-boost', nav: 'settings:boost', wait: 3500, js: `setTimeout(() => document.querySelector('[data-boost] [role=switch]')?.click(), 600);` },
+  // Switch both back off so the next mock run starts clean.
+  { name: '30c-settings-boost-off', wait: 2500, js: `document.querySelector('[data-boost] [role=switch]')?.click();` },
+  { name: '30d-settings-stretch-off', nav: 'settings:stretch', wait: 2500, js: `setTimeout(() => document.querySelector('[data-stretch] [role=switch]')?.click(), 600);` },
 ];
 
 /** Drives the mock scenario through every screen and saves PNGs. Dev only. */

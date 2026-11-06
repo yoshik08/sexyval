@@ -6,7 +6,7 @@ import { fmtNum } from '../lib/format';
 import { img } from '../lib/media';
 import { ArrowClockwise, MagnifyingGlass, Sparkle, X } from '../lib/icons';
 import { countTo } from '../lib/motion';
-import { ownedSets, useCatalog, useOwned, usePrices, useSettings } from '../lib/store';
+import { ownedSets, useCatalog, useOwned, usePreviews, usePrices } from '../lib/store';
 import { Img, OwnedMark, PriceTag, Segmented, Select, Skeleton } from '../components/ui';
 import { Btn } from '../components/kit';
 import { SkinTile, type TileData } from '../components/SkinTile';
@@ -54,7 +54,6 @@ export function CollectionScreen() {
   const catalog = useCatalog();
   const owned = useOwned();
   const prices = usePrices();
-  const settings = useSettings();
   const [tab, setTab] = useState<Tab>('skins');
   const [f, setF] = useState<SkinFilter>({ owned: 'all', sort: 'owned' });
   const sets = owned.status === 'ready' ? ownedSets(owned) : null;
@@ -84,7 +83,7 @@ export function CollectionScreen() {
   const num = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => countTo(num.current, ownedNow), [ownedNow, tab]);
 
-  const hoverOn = settings?.hoverPreviews ?? true;
+  const hoverOn = usePreviews();
   const tileFor = (s: CatalogSkin): TileData => {
     const tier = tierBy.get(s.tierId ?? '');
     const pv = previewVideo(s);

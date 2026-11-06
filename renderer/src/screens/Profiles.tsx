@@ -7,6 +7,7 @@ import { Img, Panel, RankBadge, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, PageHeader, TabBar } from '../components/kit';
 import { TrackerButton } from '../components/players';
 import { DeltaBars, HBars, LineChart } from '../components/charts';
+import { LifetimeSection, MatchLine, MmrChip } from '../components/lifetime';
 
 const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -76,12 +77,15 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
   );
 }
 
-export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue }: { connected: boolean; myPuuid?: string; initialQuery?: string; historyQueue: string }) {
-  const [query, setQuery] = useState(initialQuery ?? '');
+export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue, initialTab }: { connected: boolean; myPuuid?: string; initialQuery?: string; historyQueue: string; initialTab?: 'history' | 'stats' | 'lifetime' }) {
+  const [query, setQuery] = useState(initialQuery && !/^[0-9a-f-]{36}$/i.test(initialQuery) ? initialQuery : '');
   const [profile, setProfile] = useState<ProfileView | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState<'history' | 'stats'>('history');
+  const [tab, setTab] = useState<'history' | 'stats' | 'lifetime'>(initialTab ?? 'history');
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab, initialQuery]);
   const [filter, setFilter] = useState<HistoryFilter>({});
   const [openMatch, setOpenMatch] = useState<string | null>(null);
 
@@ -147,8 +151,9 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue 
                   <span className="text-faint">#{profile.tag ?? '?'}</span>
                 </h2>
                 <div className="mt-1 text-sm text-muted">Level {profile.level ?? '–'}{profile.leaderboardRank ? ` · Leaderboard #${profile.leaderboardRank}` : ''}</div>
-                <div className="mt-3">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <TrackerButton p={{ name: profile.name, tag: profile.tag, incognito: false, isMe: profile.isMe }} compact />
+                  <MmrChip puuid={profile.puuid} />
                 </div>
               </div>
               <div className="flex gap-8">
@@ -183,8 +188,12 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue 
             </Panel>
           </div>
 
-          <TabBar tabs={[['history', `Match history · ${profile.matches.length}`], ['stats', 'Analysis']]} value={tab} onChange={setTab} />
+          <TabBar tabs={[['history', `Match history · ${profile.matches.length}`], ['stats', 'Analysis'], ['lifetime', 'Lifetime']]} value={tab} onChange={setTab} />
 
+          {tab === 'lifetime' ? (
+            <LifetimeSection puuid={profile.puuid} onOpenMatch={setOpenMatch} />
+          ) : (
+          <>
           <div className="flex flex-wrap items-end gap-3">
             {[
               ['Queue', 'queue', queues.map((q) => [q, queueName(q)])],
@@ -216,25 +225,7 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue 
           {tab === 'history' ? (
             <Panel>
               {rows.map((m) => (
-                <button
-                  key={m.matchId}
-                  onClick={() => setOpenMatch(m.matchId)}
-                  className="grid w-full grid-cols-[6px_36px_minmax(0,1fr)_84px_72px_64px_64px_52px] items-center gap-3 border-b border-line px-5 py-2.5 text-left transition-colors duration-120 last:border-b-0 hover:bg-white/[0.03]"
-                >
-                  <span className={cx('h-8 w-1.5 rounded-[1px]', m.result === 'W' ? 'bg-win' : m.result === 'L' ? 'bg-loss' : 'bg-faint')} />
-                  <Img src={m.agentIcon} alt="" className="h-9 w-9 rounded-sm bg-white/5" />
-                  <div className="min-w-0">
-                    <div className="truncate font-display text-md font-semibold uppercase tracking-wide">{m.mapName ?? 'Unknown'}</div>
-                    <div className="truncate text-xs text-muted">{m.agentName} · {m.queueTag} · {when(m.startTime)}</div>
-                  </div>
-                  <span className="num text-right text-sm">{m.kills}/{m.deaths}/{m.assists}</span>
-                  <span className="num text-right text-sm text-muted">{m.acs} ACS</span>
-                  <span className="num text-right text-sm text-muted">{m.hsPct != null ? `${m.hsPct}% HS` : '–'}</span>
-                  <span className={cx('num text-right text-sm', m.rrChange == null ? 'text-faint' : m.rrChange >= 0 ? 'text-win' : 'text-loss')}>
-                    {m.rrChange == null ? '–' : `${m.rrChange > 0 ? '+' : ''}${m.rrChange} RR`}
-                  </span>
-                  <span className={cx('num text-right font-display text-md font-semibold', m.result === 'W' ? 'text-win' : m.result === 'L' ? 'text-loss' : 'text-muted')}>{m.score}</span>
-                </button>
+                <MatchLine key={m.matchId} m={m} onOpen={setOpenMatch} />
               ))}
               {!rows.length && <div className="px-5 py-6 text-sm text-muted">No matches for this filter.</div>}
             </Panel>
@@ -257,6 +248,8 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue 
                 <LineChart title="ACS" points={stats.trend.map((t) => ({ x: t.t, y: t.acs, label: `${when(t.t)} · ${t.result}` }))} format={(v) => String(Math.round(v))} />
               </Panel>
             </div>
+          )}
+          </>
           )}
         </div>
       )}

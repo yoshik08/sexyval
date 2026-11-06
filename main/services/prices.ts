@@ -68,7 +68,16 @@ export class PriceBook {
     await writeJson(this.file, { v: 1, prices: this.observed } satisfies Stored);
   }
 
-  quotes(catalog: Catalog, offers: OfferPrices = NO_OFFERS, list: PriceList = BUNDLED_LIST): PriceMap {
+  /** Wiki price list in use: a fresh per-game-version scrape (user data folder) or the bundled one. */
+  private list: PriceList = BUNDLED_LIST;
+
+  setList(list: PriceList): void {
+    // Union with the bundled list: a skin the new scrape couldn't match keeps its old price.
+    this.list = { date: list.date, prices: { ...BUNDLED_LIST.prices, ...list.prices } };
+    this.onChange();
+  }
+
+  quotes(catalog: Catalog, offers: OfferPrices = NO_OFFERS, list: PriceList = this.list): PriceMap {
     return buildPriceMap(catalog, this.observed, offers, list);
   }
 }

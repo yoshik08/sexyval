@@ -244,6 +244,24 @@ export class AccountManager implements SignInProvider {
     return { accessToken: t.accessToken, entitlement: t.entitlement, subject: acct.puuid, region: acct.region ?? null, label: `${acct.name ?? '?'}#${acct.tag ?? '?'}` };
   }
 
+  /** Signed-in accounts with what store sync needs (no tokens). */
+  signedIn(): { id: string; puuid: string; region: string; label: string; status: AccountInfo['status'] }[] {
+    return this.accounts
+      .filter((a) => a.puuid && a.region)
+      .map((a) => ({ id: a.id, puuid: a.puuid!, region: a.region!, label: `${a.name ?? '?'}#${a.tag ?? '?'}`, status: this.status.get(a.id) ?? 'pending' }));
+  }
+
+  /** Tokens for a specific account (store sync), re-authenticating silently when needed. Null if expired. */
+  async tokensFor(id: string): Promise<{ accessToken: string; entitlement: string } | null> {
+    let t = this.tokens.get(id);
+    if (!t || t.expiresAt - Date.now() < 2 * 60 * 1000) {
+      if (this.status.get(id) === 'expired') return null;
+      if (!(await this.silentReauth(id))) return null;
+      t = this.tokens.get(id);
+    }
+    return t ? { accessToken: t.accessToken, entitlement: t.entitlement } : null;
+  }
+
   reauth(): Promise<boolean> {
     return this.activeId ? this.silentReauth(this.activeId) : Promise.resolve(false);
   }

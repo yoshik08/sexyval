@@ -1,5 +1,7 @@
 // Plain data types for the Part 2-4 screens. No tokens ever appear here.
 import type { RankInfo } from './types';
+import type { MmrEstimate, MmrMatchRow } from './mmr';
+import type { FormStats, LifetimeAggregate, LifetimeTotals } from './lifetime';
 
 // ---------- Catalog / collection ----------
 
@@ -354,6 +356,75 @@ export interface ProfileView {
   rrHistory: { t: number; tier: number; rr: number; delta: number; matchId: string }[];
   matches: MatchRow[];
   matchesLoading: boolean;
+}
+
+// ---------- Estimated MMR (Task 1) ----------
+
+export interface MmrMatchView extends MmrMatchRow {
+  mapName?: string;
+  agentName?: string;
+  agentIcon?: string;
+  rankAfter?: RankInfo;
+  lobbyRank?: RankInfo;
+}
+
+/** Our own estimate; Riot doesn't expose MMR. */
+export interface MmrView {
+  puuid: string;
+  name?: string;
+  tag?: string;
+  isMe: boolean;
+  estimate: Omit<MmrEstimate, 'matches'>;
+  matches: MmrMatchView[];
+  est?: RankInfo;
+  mine?: RankInfo;
+  lobby?: RankInfo;
+  next?: RankInfo;
+  fetchedAt: number;
+}
+
+/** Small "Estimated MMR" chip on Profiles / Live; links to the MMR tab. */
+export interface MmrChip {
+  puuid: string;
+  est?: RankInfo;
+  label: string;
+  gapDivisions: number;
+  confidence: string;
+  usable: number;
+}
+
+// ---------- Lifetime profile (Task 9) ----------
+
+export interface LifetimeGroupView {
+  key: string;
+  name: string;
+  icon?: string;
+  games: number;
+  winRate?: number;
+  kd: number;
+  acs: number;
+}
+
+export interface LifetimeView {
+  puuid: string;
+  status: 'ready' | 'loading' | 'error';
+  error?: string;
+  totals: LifetimeTotals;
+  competitive: LifetimeAggregate['competitive'];
+  currentAct: { last10: FormStats; last20: FormStats };
+  byAgent: LifetimeGroupView[];
+  byMap: LifetimeGroupView[];
+  best: { agent?: LifetimeGroupView; worstAgent?: LifetimeGroupView; map?: LifetimeGroupView; worstMap?: LifetimeGroupView };
+  timeline: LifetimeAggregate['timeline'];
+  actStarts: (LifetimeAggregate['actStarts'][number] & { name?: string })[];
+  /** Newest first; details loaded so far. */
+  matches: MatchRow[];
+  /** Every match in the history list (all queues). */
+  totalMatches: number;
+  /** How many of them have details loaded (aggregates are over these). */
+  loaded: number;
+  hasMore: boolean;
+  fetchedAt: number;
 }
 
 export interface MatchDetailView {

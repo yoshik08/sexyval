@@ -9,6 +9,7 @@ import { ownedSets, saveSettings, toggleWish, useCatalog, useOwned, useQuote, us
 import { Btn } from './kit';
 import { Img, PriceTag, TierMark, tint } from './ui';
 import { VideoPlayer } from './VideoPlayer';
+import { fmtDay, useSeen } from '../lib/shopHistory';
 
 /** Extra facts when the skin is opened from the store (price you actually see, discount, where it is). */
 export interface SkinContext {
@@ -106,6 +107,7 @@ function Body({ skin, ctx }: { skin: CatalogSkin; ctx?: SkinContext }) {
   const quote = useQuote(skin.id);
   const wish = useWishlist();
   const settings = useSettings();
+  const seen = useSeen(skin.id);
   const sets = owned.status === 'ready' ? ownedSets(owned) : null;
   const tier = catalog.tiers.find((t) => t.id === skin.tierId);
   const theme = skin.themeId ? catalog.themes[skin.themeId] : undefined;
@@ -217,6 +219,12 @@ function Body({ skin, ctx }: { skin: CatalogSkin; ctx?: SkinContext }) {
               <PriceTag quote={quote} size="lg" className="[&_.t-num]:text-[36px] [&_.t-num]:leading-none" />
               {caption && <p className="text-pretty mt-2 text-sm text-muted">{caption}</p>}
             </>
+          )}
+          {seen.count > 0 && (
+            <p data-seen className="mt-2 text-xs text-faint">
+              Seen in a captured store {seen.count} time{seen.count === 1 ? '' : 's'}
+              {seen.last ? ` · last ${fmtDay(seen.last)}` : ''}
+            </p>
           )}
           <div className="mt-4 flex items-center gap-3">
             {isOwned != null && (

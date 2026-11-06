@@ -6,8 +6,8 @@ Personal, unofficial Valorant companion for Windows, in a normal desktop window,
 
 ## Install
 
-- `release/SexyVal-Setup-1.2.0.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
-- `release/SexyVal-Portable-1.2.0.exe` runs without installing.
+- `release/SexyVal-Setup-1.3.1.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
+- `release/SexyVal-Portable-1.3.1.exe` runs without installing.
 
 The builds are unsigned, so Windows SmartScreen will warn. Click "More info", then "Run anyway".
 
@@ -36,6 +36,7 @@ npm run check        # lint + typecheck + tests
 npm run screenshots  # mock mode, captures every screen to ./screenshots, then quits
 npm run dist         # icons + build + electron-builder --win (NSIS + portable) into ./release
 npm run mock:update  # fake update feed for manually testing the auto-updater against a packaged build
+npm run build:helper # helper/stretch.exe (Stretch / Boost) with Windows' own C# compiler; part of build and dist
 ```
 
 Troubleshooting first install:
@@ -43,13 +44,67 @@ Troubleshooting first install:
 - **Electron download hangs extracting on very new Node**: unzip `%LOCALAPPDATA%\electron\Cache\*\electron-v33*-win32-x64.zip` into `node_modules/electron/dist` and write `electron.exe` into `node_modules/electron/path.txt`.
 - **App starts as plain Node** (`Cannot read properties of undefined (reading 'setPath')`): your shell has `ELECTRON_RUN_AS_NODE=1` (VS Code terminals set it). The npm scripts use `scripts/run-electron.mjs`, which strips it.
 
-## What changed in 1.3 (so far)
-
-Three standalone fixes/features, independent of the rest of 1.3:
+## What changed in 1.3
 
 - **Silent auto-update.** `electron-updater` against GitHub Releases (`.github/workflows/release.yml` publishes on a `v*` tag). Checks 30 s after start and every 4 h, downloads in the background (differential, via the NSIS blockmap), and never shows a dialog or OS notification. Once downloaded, it waits for a safe moment — Valorant idle, no video playing, no unsaved loadout edits, and either hidden in the tray or unfocused/idle 5+ minutes (`isSafeToInstall`, `shared/update.ts`) — before saving window bounds, tab, scroll position and the video/loadout flags to `resume.json` and calling `quitAndInstall(true, true)`. The relaunch restores that state and shows a brief "Updated to x.y.z" toast; nothing else is visible. If no safe moment ever comes, it installs on the next normal quit. Settings → General → Updates has an "Install updates automatically" toggle (on by default) and "Check now"; the portable build shows a plain "New version on GitHub" link instead, since it can't replace itself.
 - **Fix: sidebar highlight stuck after resize/maximize.** The sliding highlight behind the active sidebar tab only re-measured on tab change, so maximizing (or any resize) left it behind — worst on Settings, which sits at the bottom. It now also watches the sidebar's size with a `ResizeObserver` and re-measures when fonts finish loading, snapping instantly for a layout-driven move instead of sliding (tab changes still slide).
+- **Estimated MMR (new MMR tab).** See [Estimated MMR](#estimated-mmr-our-own-estimate) below. Profiles and an opened Live row get an "Estimated MMR" chip that opens the tab for that player.
+- **Lifetime profile for every visible player in your match.** Open a Live row (agent select: your 5; in game: all 10) and it shows a lifetime line (matches, win rate, K/D, ACS, ADR), the Estimated MMR chip and **Full profile**, which opens Profiles on the new **Lifetime** tab by PUUID. Lifetime = competitive updates and match history paged 20 at a time until a short page (every act), then match details 20 at a time ("Load 20 more"), all from Riot's own `pd` endpoints with your session, through the pd rate limiter and the existing disk cache (a match seen for anyone is never fetched again). It shows totals (matches, win rate from every act, K/D, ACS, ADR, HS%, first bloods), current-act form (last 10 / 20), per-agent and per-map tables, best / worst agent and map (3+ games), rank across acts with act boundaries, and the full match list. Pure aggregation: `shared/lifetime.ts`. It is fetched only when a row is opened (rows that start open in Detailed density wait for a click), never for a whole roster. Opponents appear only once the match starts: Riot's pregame endpoint has no enemy roster.
+- **Hidden players stay hidden.** Players who turned on Valorant's hide-name setting (`PlayerIdentity.Incognito`) are still not looked up anywhere: not in Live, and the Profiles / MMR / lifetime lookups refuse a player the live match marks hidden (`GameLoop.isHidden`). They show "Hidden", agent, level and the rank badge the game sends, as in 1.2.
+- **Store archive: past bundles and a daily-shop calendar.** Every featured bundle (`bundles.json`) and every daily shop + night market per account and day (`shop-history.json`) is kept forever, merged, never overwritten; every price seen also goes to `prices.json`. Store → **Past bundles** lists them (art, every item incl. cards/buddies, exact base and discounted prices, dates seen, which account). Store → **History** is a month calendar per account: four tier-tinted thumbnails and the day's VP per day, a marker for night market days, a star when a watchlist skin showed up, a dash for days not captured, arrow / Page Up / Page Down keys. Click a day for its skins (opens the skin sheet), prices, night market discounts and what you own now. Search highlights every day a skin appeared ("Horizon Vandal · seen 14 times · last Nov 6"); the skin sheet says how often a skin was seen. Stats: days captured, most repeated skin, highest-value day, watchlist days. Shops are keyed by their rotation date (UTC, from the time left), never local midnight. A new bundle gives a toast + Windows notification (notifications setting respected).
+- **Store fetch cadence.** A minute after every daily / bundle / night-market rotation, at least hourly, on start, when tokens appear, and after a game update — for every signed-in account (one after another, through the pd rate limiter; the active account through the normal store). After a game update SexyVal also refreshes the valorant-api catalog and bundle names and re-runs the wiki price scrape once per game version into the user data folder (`skin-prices.json`; the bundled list stays the fallback, a thin result never replaces a good list). Files that fail to parse are kept as `<name>.corrupt-<timestamp>.json`; a failed write is retried and the in-memory copy kept.
+- **Stretch (Settings → Stretch).** See [Stretched resolution](#stretched-resolution).
+- **Boost (Settings → Boost).** See [Game boost](#game-boost).
 - **Fix: launch at startup is now on by default.** `launchAtStartup` defaulted to `false` and was only pushed to Windows' login items when the setting *changed*, so the default never actually registered. Fresh installs and upgrades from before this change now get it turned on once (a `settingsVersion` migration — `shared/settingsMigration.ts`); after that, whatever you pick sticks. Every start also re-syncs Windows' login item to the setting, so a moved install folder or an updated install path can't silently disable it.
+
+## Estimated MMR (our own estimate)
+
+Riot doesn't expose MMR; everything here is SexyVal's estimate and the screen says so. Riot has said RR = base win/loss + round margin + a small performance effect + a convergence term that pulls your rank toward your MMR (MMR above rank: wins pay more than losses cost). `shared/mmr.ts` reads that back out of your current act's competitive matches (`competitiveupdates`, first 20) and their details:
+
+1. **Exclusions** (still listed, greyed): placements, AFK penalties, draws / remakes, 5-stacks (match-details `partyId`), other acts.
+2. **Cleaned RR:** least squares per side, `RR = base + a·roundDiff + b·(ACS − 200)/100`, evaluated at roundDiff 0 and ACS 200. Under 6 wins or 6 losses with details: raw averages minus `RankedRatingPerformanceBonus`.
+3. **Split gap** = (avg win − avg loss) / `RR_PER_DIVISION` (5).
+4. **Lobby average:** mean competitive tier of the other 9 players per match (unranked ignored), averaged.
+5. **Blend:** `0.6 · lobby + 0.4 · (your tier + gap)`, clamped to Iron 1…Radiant; the headline rounds to a division.
+6. **Confidence:** Low under 5 usable matches, in the first 3 days of an act, or over 40% excluded; High over 10 with a per-match spread ≤ 1.5 divisions; else Medium.
+7. **Forecast:** wins to the next division at your raw win RR, the cost of a loss, "Division skip possible" at a gap ≥ 2.
+
+**Self-check:** `node scripts/mmr-backtest.mjs` (after `npm run build:main`) replays stored competitive updates (SexyVal keeps them in `%APPDATA%\SexyVal\mmr-updates\` from 1.3 on) and checks whether the estimate's sign (above / at / below, ±0.5 division) predicts the RR asymmetry of the next 5 usable matches (±2.5 RR), then grid-searches the weights and `RR_PER_DIVISION`. On 6 Nov 2026 there was no real data yet (1.3 had never run against a live account), so it ran on the mock careers only (`--synthetic`, 684 updates, 325 predictions): **71.1% with the shipped values** (W_LOBBY 0.6, W_SPLIT 0.4, RR_PER_DIVISION 5). The best grid point scored 74.2% (0.4 / 0.6 / 7), but tuning on data generated by SexyVal's own mock would be circular, so the defaults stay until the script has run on real updates.
+
+## Stretched resolution
+
+Settings → Stretch: on/off, 1440×1080 / 1280×960 / 1280×1024 / 1080×1080 / custom, monitor, "Native while alt-tabbed". One status line ("Stretched to 1440×1080 @ 144 Hz" / "Native") and errors only when something failed.
+
+- **Valorant's ini** (only while the game is closed; queued until it closes otherwise): every `GameUserSettings.ini` under `%LOCALAPPDATA%\VALORANT\Saved\Config` (per account `WindowsClient` or `Windows`, plus the machine-wide one) gets `ResolutionSizeX/Y`, `LastUserConfirmedResolutionSizeX/Y`, `DesiredScreenWidth/Height`, `LastUserConfirmedDesiredScreenWidth/Height`, `bShouldLetterbox=False`, `bLastConfirmedShouldLetterbox=False`, `FullscreenMode=1`, `LastConfirmedFullscreenMode=1`, `PreferredFullscreenMode=1` (Windowed Fullscreen, so the overlay keeps working). All of these keys were checked on a real install (Nov 2026). The original is backed up once (`GameUserSettings.sexyval-backup.ini`), then the file is made read-only. Off: read-only removed, backup restored.
+- **Display:** when `VALORANT-Win64-Shipping.exe` appears (process list polled every 2 s, not the Riot API, no handle to the game), `helper/stretch.exe` switches the chosen monitor with `ChangeDisplaySettingsExW` + `dmDisplayFixedOutput = DMDFO_STRETCH`, at that size's highest refresh rate. The change is not saved to the registry, so a reboot always comes back native. When Valorant exits, the native mode saved at start comes back.
+- **Crash safety:** a detached watchdog (`stretch.exe watchdog <pid>`) restores native if SexyVal dies while stretched; every start restores native if the desktop is still stretched with no game running; quitting SexyVal restores native before it exits.
+- **Helper:** `helper/stretch.cs`, built with the .NET Framework C# compiler that ships with Windows (`npm run build:helper`), unsigned, shipped in `extraResources`. `--dry-run` everywhere (CI, mock mode).
+- **Not done (needs real hardware):** the vendor fallbacks. If the driver ignores `DMDFO_STRETCH` (read back after the switch), SexyVal says "The graphics driver kept black bars: set its scaling to Full-screen" instead of calling NvAPI / AMD ADLX, and a resolution the monitor doesn't list is reported, not created as a custom resolution. Writing NvAPI/ADLX struct code that changes display configuration without a machine to test it on was not worth the risk.
+
+## Game boost
+
+Settings → Boost: one master switch, then a switch and a status dot per tweak (green = active, amber = waiting for Valorant, red = failed). Nothing opens, reads or changes the Valorant process; no injection; nothing touches Vanguard. Every change is written to a journal (`boost-journal.json`) with the original value **before** it is made, and reverted from it (`shared/boost.ts`).
+
+| Tweak | When | How |
+| --- | --- | --- |
+| SexyVal gets out of the way | while Valorant runs | videos paused, hover previews off, no video caching, background catalog / price work deferred, renderer throttled, Below Normal priority, minimise goes to tray |
+| High performance power plan | while Valorant runs | Ultimate Performance (created with `powercfg -duplicatescheme e9a42b02-…` if missing), else High performance; your plan back after |
+| Pause Windows Search indexing (opt-in) | while Valorant runs | `sc stop WSearch` if it was running, started again after |
+| Pause update delivery optimization (opt-in) | while Valorant runs | `sc stop DoSvc` the same way |
+| High CPU priority | while on | `HKLM\…\Image File Execution Options\VALORANT-Win64-Shipping.exe\PerfOptions\CpuPriorityClass = 3` (Windows applies it at launch) |
+| High-performance GPU | while on | `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, `GpuPreference=2;` for the Valorant exe (path from the Riot Client's product settings) |
+| Windows Game Mode | while on | `HKCU\Software\Microsoft\GameBar` `AutoGameModeEnabled=1`, `AllowAutoGameMode=1` |
+| Game Bar recording off | while on | `GameConfigStore\GameDVR_Enabled=0`, `GameDVR\AppCaptureEnabled=0` |
+| Optimizations for windowed games | while on | `DirectXUserGlobalSettings` gets `SwapEffectUpgradeEnable=1;` (other flags in that value are kept) |
+| Hardware-accelerated GPU scheduling | while on | `GraphicsDrivers\HwSchMode=2`; shows its current state and "takes effect after restart" |
+
+**Admin with one prompt:** tweaks that need admin (CPU priority, HAGS, the two services) go through one Windows Scheduled Task registered with Highest privileges the first time one is needed (`SexyVal\Helper`, created from an XML definition through one UAC prompt). After that SexyVal writes the commands to a file and runs the task: no prompts. The helper only accepts an allow-list from that file: `reg query/add/delete` on exactly the IFEO PerfOptions key and the GraphicsDrivers key (values `CpuPriorityClass` / `HwSchMode`, DWORD only), `sc query/stop/start` for `WSearch` / `DoSvc`, and deleting its own task. Everything else is refused (tested). SexyVal itself never runs elevated.
+
+**Crash / uninstall:** on start, session tweaks left in the journal with no game running are reverted. The NSIS uninstaller (`build/installer.nsh`, not on updates) runs `SexyVal.exe --sexyval-uninstall`: native display, Valorant's original ini, every Boost tweak reverted, the task removed.
+
+**Competitive FPS preset** (game closed, backup first): sets every `[ScalabilityGroups]` `sg.*` quality to 0 (view distance, anti-aliasing, shadows, global illumination, reflections, post-process, textures, effects, foliage, shading). Those keys were verified on a real install; bloom, vignette, distortion and anisotropic filtering are not in the local ini files there, so they are not written. Resolution, stretch and NVIDIA Reflex live in other keys and aren't touched. "Restore my settings" puts back only the `[ScalabilityGroups]` values from the backup.
+
+Not done, on purpose: timer-resolution hacks, "network throttling" registry tweaks, RAM cleaners, killing processes, editing game files, overclocking. No FPS numbers are shown: they can't be measured from outside the game.
 
 ## What changed in 1.2
 
@@ -125,16 +180,17 @@ Settings → Accounts → **Sign in with Riot** opens Riot's own login page in a
 
 | Area | What's there | Endpoints |
 | --- | --- | --- |
-| Store | Daily, bundles, night market (discounts), wallet, owned badges, watchlist with toast + Windows notification when a watched skin shows up, every tile opens the skin sheet | store v3/v2 storefront, wallet, owned items |
+| Store | Daily, bundles, night market (discounts), wallet, owned badges, watchlist with toast + Windows notification when a watched skin shows up, every tile opens the skin sheet. Past bundles (kept forever, exact prices) and a per-account daily-shop calendar with search and stats, for every signed-in account | store v3/v2 storefront, wallet, owned items |
 | Collection | Every skin with owned/not-owned state, counters overall / per weapon / per collection, filters (owned, weapon, tier, collection, search), sort (tier, name, newest*), virtualized grid, lazy images, hover preview video. Buddies, sprays (animated on hover), cards, titles. | valorant-api.com + `store/v1/entitlements/{puuid}/{type}` |
 | Skin sheet | Large render (pointer parallax), tier, collection, price (your store, store offers or the bundled list) / approximate price (≈) / contract source, level list, variant swatches, owned markers per level/variant, custom video player (Space, arrows, M, F), "Play all", sound preference | valorant-api.com |
 | Loadout | Card, title, sprays (wheel order), per-weapon skin/level/variant, buddies (uses owned InstanceIDs), incognito/hide level, local presets, floating apply bar with change count | `personalization/v3/players/{puuid}/playerloadout` GET/PUT |
 | Missions | Daily checkpoints, weeklies, queued weeklies, future weeklies by date, battle pass, event pass, agent contracts (activate), account level | `contracts/v1/contracts`, `account-xp/v1/players`, valorant-api missions/contracts/seasons |
 | Party | Queue select, start/stop queue, ready, open/closed, code generate/disable, join by code, invite Name#Tag, decline requests, kick, leave, member card/level/rank, pings per server | `parties/v1/...` |
-| Profiles | Self or Name#Tag, "Open on tracker.gg", title, card, level, rank, peak, RR, RR graph, history with RR impact, filters (queue/agent/map/result/date), full scoreboard (K/D/A, ACS, ADR, HS%, first bloods, avg loadout), analysis (per-agent/map win rate, K/D and ACS trends) | `mmr/v1/players`, `competitiveupdates`, match history/details, name-service |
+| Profiles | Self or Name#Tag, "Open on tracker.gg", title, card, level, rank, peak, RR, RR graph, history with RR impact, filters (queue/agent/map/result/date), full scoreboard (K/D/A, ACS, ADR, HS%, first bloods, avg loadout), analysis (per-agent/map win rate, K/D and ACS trends), Lifetime tab (every act, paged), Estimated MMR chip | `mmr/v1/players`, `competitiveupdates` (paged), match history (paged)/details, name-service |
+| MMR | Estimated MMR (our own estimate) for you or any player SexyVal can resolve: headline vs rank, RR split, lobby average, win rate, rank / lobby / estimate graph, forecast, every match with why its RR was what it was | `mmr/v1/players`, `competitiveupdates`, match details |
 | Hub | Friends + presence + requests (send/cancel), leaderboard by act, agents/maps/weapons browsers, local lineups library (images + links) | local `chat/v4/*`, `mmr/v1/leaderboards`, valorant-api.com |
-| Live | Queue timer; agent select with starting-side ATK/DEF badge (hardcoded, see below) + "Loadout & skins" shortcut; current + peak rank, SV Score, last 5 and a tracker.gg button per visible player (allies in agent select, everyone in game), compact / expandable rows. Optional agent-select overlay (map + side). | pregame / core-game, `parties/v1`, `mmr/v1/players`, local WebSocket |
-| App | Icon picker (4 colours, tray + window), session-expired alert, poll rate, history queue filter, launch at startup, notifications, video cache toggle with size + clear, platform selector, HenrikDev key, Debug | — |
+| Live | Queue timer; agent select with starting-side ATK/DEF badge (hardcoded, see below) + "Loadout & skins" shortcut; current + peak rank, SV Score, last 5 and a tracker.gg button per visible player (allies in agent select, everyone in game), compact / expandable rows; full lifetime profile and Estimated MMR for every visible player in the match when a row is opened. Optional agent-select overlay (map + side). | pregame / core-game, `parties/v1`, `mmr/v1/players`, local WebSocket |
+| App | Icon picker (4 colours, tray + window), session-expired alert, poll rate, history queue filter, launch at startup, notifications, video cache toggle with size + clear, platform selector, HenrikDev key, Stretch, Boost, Debug | — |
 
 \* No release date exists in the catalog. "Newest" = first time SexyVal saw the skin, then catalog order.
 
@@ -151,6 +207,8 @@ Settings → Accounts → **Sign in with Riot** opens Riot's own login page in a
 
 `MOCK=1` starts a fake Riot server (`mock/server.ts` + `mock/extra.ts`) inside the app, writes a fake lockfile, and points glz/pd/shared/auth at it. Shapes follow valorant-api-types. It covers: local entitlements, external-sessions, region-locale, chat friends/presences/requests, sign-in (authorize redirect, entitlement, userinfo, geo), pregame/core-game, history/details (with a 429), name-service, storefront (v3, bundles, night market), wallet, owned items (docs `EntitlementsByTypes` shape), contracts, account XP, loadout v3 GET/PUT (`ActiveExpressions`), MMR, competitive updates, leaderboard, content, the party endpoints (with a real `MATCHMAKING` state and `QueueEntryTime` in the queue phase), the local WebSocket (same handshake and `OnJsonApiEvent` frames as the Riot Client, sent on every phase change and party action), and HenrikDev store offers at `/henrik` (401 for a bad key; with the key `HDEV-mock-0000-key` it answers 404 RiotImplementationRemoved like production, or a v1/v2 offers payload with `MOCK_HENRIK=offers`). It also writes a fake `GameUserSettings.ini` in exclusive Fullscreen so the overlay warning can be seen. Retired routes (`store/v1/offers`, personalization v2) answer 404 as they do in production.
 
+1.3 mock additions: every player has a deterministic career (`mock/career.ts`) that drives history, `competitiveupdates` (paged with `startIndex`/`endIndex`) and match details together, so RR sign, score, lobby ranks and party size agree; you have 52 matches and each persona 48, across two acts. One persona is flagged `trackerPrivate` in mock data only (the app never reads that flag or any tracker; a test asserts only `pd` endpoints were called). A second featured bundle rotates every 90 s (30 s with `MOCK_FAST`) and includes a card and a buddy; the daily store resets at 00:00 UTC like Riot's. The app seeds 60 days of shop history for two accounts (with gaps and a night market) into the mock profile. Stretch runs the real helper with `--dry-run` (it reads your monitors but never changes them) and Boost runs against a pretend Windows (`mock/fakeWindows.ts`). The mock server logs every request path (`mock.requests`) for tests.
+
 `mock/fixtures/collection.json` (from `scripts/make-mock-fixtures.mjs`) holds only real UUIDs, dates and prices: owned items, shop skins with and without videos, loadout, missions and contracts.
 
 | Env var | Effect |
@@ -159,6 +217,8 @@ Settings → Accounts → **Sign in with Riot** opens Riot's own login page in a
 | `MOCK_PHASE=pregame` | Pin a phase at startup: `idle`, `queue`, `pregame`, `ingame`, `offline` (Riot Client closed), `noval` (Riot Client open, Valorant closed). The automatic scenario runs idle → queue → pregame → ingame. |
 | `MOCK_FAST=1` | Short scenario (6 s / 4 s / 12 s / 10 s). |
 | `MOCK_HENRIK=offers` | Mock HenrikDev serves an offers payload instead of production's 404. |
+| `MOCK_MMR=<persona>` | Your own MMR persona: `above` (default: +23/−11, lobbies ~2 divisions up), `at` (+18/−18), `below` (+12/−23, low lobbies), `excluded` (mostly AFK / 5-stack / placements). The at / below / excluded personas and a tracker-private player always sit in the mock match, so Live can open each. |
+| `SEXYVAL_DRY_RUN=1` | Not mock: Stretch and Boost only report what they would do (helper `--dry-run`, pretend Windows). Mock mode always does this. |
 | `MOCK_STRESS=<case>` | Worst-case data for UI checks: `long-names` (16-character, non-Latin, emoji Riot IDs), `radiant` (everyone Radiant, peak Radiant), `unrated` (no rank anywhere), `nommr` (MMR answers 503), `hidden` (everyone but you hidden). |
 | `SEXYVAL_SHOT_ONLY=04,08` | Only run those screenshot steps. |
 | `SEXYVAL_USER_DATA=<dir>` | Use a separate profile (own single-instance lock), e.g. to test next to an installed copy. |
@@ -200,6 +260,11 @@ Built from the docs and verified only against the mock:
 - **1.2:** HenrikDev store offers with a real key. Without a key both versions answer 401; HenrikDev's spec says the endpoint now always returns 404, so the offers coverage (how many store skins get a price) could not be measured. Both shapes are parsed from HenrikDev's docs and Riot's legacy offers body.
 - **1.2:** `mmr/v1/players` for other players (current rank, peak and the act it was reached in), and tier numbering for acts before Episode 5.
 - **1.3:** the whole silent auto-update path against a real NSIS install: a published GitHub release, the differential blockmap download, and `quitAndInstall(true, true)` actually relaunching a packaged build. `scripts/mock-update-server.mjs` exercises check → download → `update-downloaded` → safe-moment wait → resume.json against a locally faked feed, but someone has to watch a real installed copy do the relaunch at least once before this is trusted. `isSafeToInstall` itself (`shared/update.ts`) is fully unit-tested.
+- **1.3:** Estimated MMR against real competitive updates (the backtest has only run on mock data), and `RankedRatingPerformanceBonus` / match-details `partyId` on today's API.
+- **1.3:** the paginated lifetime fetch against a real account with a long competitive history: rate-limit behaviour over 100+ matches, and whether Riot throttles `competitiveupdates` paging. It pages sequentially through the pd limiter (4 at a time) and caps at 50 pages per list.
+- **1.3:** store sync for a second signed-in account on a real store (`storefrontFor`, tokens per account); bundle rotation times from `DurationRemainingInSeconds` on the live store; the per-game-version wiki scrape inside the app.
+- **1.3 Stretch:** `DMDFO_STRETCH` on real drivers (on the dev laptop the panel is driven by an NVIDIA RTX 3050; only `list` and `--dry-run` were run, never a real switch, since the game may be running), Valorant accepting a read-only `GameUserSettings.ini`, the watchdog restoring after a real crash, the uninstaller hook. NvAPI / AMD ADLX fallbacks and custom resolutions are not implemented (see Stretch).
+- **1.3 Boost:** every tweak against real Windows (all were tested only against the pretend Windows), the scheduled task registration (XML, one UAC prompt) and whether a standard user can trigger it with `schtasks /Run`, Ultimate Performance duplication on Home editions, `sc stop` on `DoSvc`, and SexyVal's own CPU use while quiet (the < 1% target is not measured).
 - Everything in Part 2 (the real Riot login page, captchas, cookie lifetime, silent re-auth, riot-geo).
 - `auth.riotgames.com/userinfo` `affinity` (live value `{"pp":"as"}`, undocumented, not used).
 - Bundle `DiscountPercent` scale (fraction vs percent), bundle names (valorant-api `/bundles/{DataAssetID}`).
@@ -218,4 +283,8 @@ Built from the docs and verified only against the mock:
 - The overlay can't appear over exclusive Fullscreen.
 - Prices: the bundled list is a snapshot of the Valorant wiki (5 Nov 2026) and can be wrong where the wiki is; newer skins show an approximation (≈) until they appear in your store. Run `node scripts/scrape-prices.mjs` to refresh the list.
 - SV Score is a fixed-range blend of five recent matches: a small sample, comparable only with other SV Scores.
+- Estimated MMR is an estimate from RR changes and lobby ranks; Riot doesn't show real MMR.
+- Lifetime profiles only work for players in your live match (allies in agent select, everyone once the match starts) or players you've played with (via stored match details, friends, the leaderboard). It is not a way to look up an arbitrary stranger, and hidden-name players are never looked up.
+- A bundle or daily shop is captured only if SexyVal runs with valid tokens at least once while it's in the store; start-with-Windows + the tray keep that near 100%. Days SexyVal never saw stay empty on the calendar.
+- Valorant may sync its settings from the cloud and override the ini (stretch keys are read-only against that; the FPS preset isn't).
 - Windows only. Unsigned builds.

@@ -2,6 +2,7 @@ import { app } from 'electron';
 import type { Settings } from '../shared/types';
 import { dataDir, readJson, writeJson } from './paths';
 import { CURRENT_SETTINGS_VERSION, loginItemOutOfSync, migrateStartupDefault } from '../shared/settingsMigration';
+import { TWEAKS } from '../shared/boost';
 
 const DEFAULTS: Settings = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
@@ -25,6 +26,12 @@ const DEFAULTS: Settings = {
   henrikKey: '',
   liveDensity: 'auto',
   autoUpdate: true,
+  stretchEnabled: false,
+  stretchRes: { w: 1440, h: 1080 },
+  stretchDevice: null,
+  stretchNativeOnAltTab: false,
+  boostEnabled: false,
+  boostTweaks: {},
 };
 
 /** Shown instead of the key: the renderer only learns that one is set (and its last 4 characters). */
@@ -35,6 +42,7 @@ const PLATFORMS = ['PC', 'xbox', 'playstation'] as const;
 const OVERLAY_POSITIONS = ['top-center', 'top-left', 'top-right'] as const;
 const OVERLAY_SCALES = ['small', 'medium'] as const;
 const DENSITIES = ['auto', 'compact', 'detailed'] as const;
+const BOOST_IDS: string[] = TWEAKS.map((t) => t.id);
 
 let current: Settings = DEFAULTS;
 let saveTimer: NodeJS.Timeout | null = null;
@@ -98,6 +106,17 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   if (typeof patch.overlayMatchFound === 'boolean') next.overlayMatchFound = patch.overlayMatchFound;
   if (DENSITIES.includes(patch.liveDensity as any)) next.liveDensity = patch.liveDensity!;
   if (typeof patch.autoUpdate === 'boolean') next.autoUpdate = patch.autoUpdate;
+  if (typeof patch.stretchEnabled === 'boolean') next.stretchEnabled = patch.stretchEnabled;
+  if (typeof patch.stretchNativeOnAltTab === 'boolean') next.stretchNativeOnAltTab = patch.stretchNativeOnAltTab;
+  const r = patch.stretchRes;
+  if (r && Number.isInteger(r.w) && Number.isInteger(r.h) && r.w >= 640 && r.w <= 7680 && r.h >= 480 && r.h <= 4320) next.stretchRes = { w: r.w, h: r.h };
+  if (patch.stretchDevice === null || (typeof patch.stretchDevice === 'string' && /^\\\\\.\\DISPLAY\d{1,2}$/.test(patch.stretchDevice))) next.stretchDevice = patch.stretchDevice;
+  if (typeof patch.boostEnabled === 'boolean') next.boostEnabled = patch.boostEnabled;
+  if (patch.boostTweaks && typeof patch.boostTweaks === 'object') {
+    const t: Record<string, boolean> = { ...current.boostTweaks };
+    for (const [k, v] of Object.entries(patch.boostTweaks)) if (BOOST_IDS.includes(k) && typeof v === 'boolean') t[k] = v;
+    next.boostTweaks = t;
+  }
   // The masked value comes back unchanged from the form; only a real edit replaces the key.
   if (typeof patch.henrikKey === 'string' && patch.henrikKey.length <= 200 && !patch.henrikKey.startsWith(KEY_MASK)) next.henrikKey = patch.henrikKey.trim();
   if (next.launchAtStartup !== current.launchAtStartup && app.isPackaged) {

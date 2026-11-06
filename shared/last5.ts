@@ -24,6 +24,8 @@ export interface TrimmedDetails {
     cardId?: string;
     titleId?: string;
     level?: number;
+    /** Party the player queued with (match-details players[].partyId); absent in details cached before 1.3. */
+    partyId?: string;
     /** Derived from roundResults[].playerStats; null when the match has no round data. */
     adr?: number | null;
     hsPct?: number | null;
@@ -115,6 +117,7 @@ export function trimDetails(raw: any, fallbackId?: string): TrimmedDetails {
         cardId: typeof p.playerCard === 'string' ? p.playerCard : undefined,
         titleId: typeof p.playerTitle === 'string' ? p.playerTitle : undefined,
         level: p.accountLevel != null ? num(p.accountLevel) : undefined,
+        partyId: typeof p.partyId === 'string' && p.partyId ? p.partyId : undefined,
         ...(() => {
           const a = adv.get(p.subject);
           const rp = num(p.stats?.roundsPlayed);

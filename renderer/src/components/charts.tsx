@@ -17,6 +17,111 @@ function useWidth<T extends HTMLElement>(fallback: number) {
 // Chart colors validated with the dataviz palette script against the panel surface (#11161d):
 // gain/loss diverging pair passes lightness, chroma, CVD and contrast checks.
 export const CHART = { series: '#29a894', gain: '#29a894', loss: '#ff4655', grid: 'rgba(236,232,225,0.07)', axis: '#5f6875' };
+/** Fixed categorical order for multi-line charts (validated on #0b0b0d: lightness, chroma, CVD ΔE ≥ 13, contrast). */
+export const SERIES = ['#7b7be0', '#b87a1e', '#29a894'] as const;
+
+export interface Series {
+  key: string;
+  label: string;
+  color: string;
+  /** One value per x index; undefined = gap. */
+  values: (number | undefined)[];
+  dashed?: boolean;
+}
+
+/** Several lines on one y-axis with a legend, a crosshair and one tooltip listing every series. */
+export function MultiLineChart({ series, height = 220, title, format = (v: number) => String(v), tip, yTicks }: { series: Series[]; height?: number; title: string; format?: (v: number) => string; tip?: (i: number) => React.ReactNode; yTicks?: number[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const [box, W] = useWidth<HTMLDivElement>(720);
+  const H = height;
+  const pad = { l: 64, r: 12, t: 10, b: 18 };
+  const n = Math.max(0, ...series.map((s) => s.values.length));
+  const all = series.flatMap((s) => s.values.filter((v): v is number => v != null));
+  if (n < 2 || !all.length) return <div className="flex h-[120px] items-center justify-center text-sm text-muted">Not enough data for {title.toLowerCase()}.</div>;
+  const min = Math.floor(Math.min(...all) - 0.3);
+  const max = Math.ceil(Math.max(...all) + 0.3);
+  const span = max - min || 1;
+  const x = (i: number) => pad.l + (i / (n - 1)) * (W - pad.l - pad.r);
+  const y = (v: number) => pad.t + (1 - (v - min) / span) * (H - pad.t - pad.b);
+  const path = (vals: (number | undefined)[]) => {
+    let d = '';
+    let pen = false;
+    vals.forEach((v, i) => {
+      if (v == null) return void (pen = false);
+      d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+      pen = true;
+    });
+    return d;
+  };
+  const ticks = yTicks?.filter((t) => t >= min && t <= max) ?? [min, min + span / 2, max];
+  return (
+    <div ref={box} className="relative">
+      <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted" aria-hidden>
+        {series.map((s) => (
+          <span key={s.key} className="inline-flex items-center gap-1.5">
+            <svg width="18" height="6">
+              <line x1="1" x2="17" y1="3" y2="3" stroke={s.color} strokeWidth="2" strokeLinecap="round" strokeDasharray={s.dashed ? '3 3' : undefined} />
+            </svg>
+            {s.label}
+          </span>
+        ))}
+      </div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width={W}
+        height={H}
+        className="block w-full"
+        role="img"
+        aria-label={title}
+        onMouseLeave={() => setHover(null)}
+        onMouseMove={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          const px = ((e.clientX - r.left) / r.width) * W;
+          setHover(Math.max(0, Math.min(n - 1, Math.round(((px - pad.l) / (W - pad.l - pad.r)) * (n - 1)))));
+        }}
+      >
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} stroke={CHART.grid} />
+            <text x={pad.l - 6} y={y(t) + 3} textAnchor="end" fontSize="11" fill={CHART.axis}>
+              {format(t)}
+            </text>
+          </g>
+        ))}
+        {series.map((s) => (
+          <path key={s.key} d={path(s.values)} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" strokeDasharray={s.dashed ? '4 4' : undefined} />
+        ))}
+        {hover != null && (
+          <>
+            <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={H - pad.b} stroke="rgba(236,232,225,0.25)" />
+            {series.map((s) => (s.values[hover] != null ? <circle key={s.key} cx={x(hover)} cy={y(s.values[hover]!)} r="4.5" fill={s.color} stroke="#0b0b0d" strokeWidth="2" /> : null))}
+          </>
+        )}
+      </svg>
+      {hover != null && (
+        <div
+          className="pointer-events-none absolute top-6 z-10 min-w-[180px] rounded-sm border border-line2 bg-raised px-2.5 py-1.5 text-xs shadow-lg shadow-black/40"
+          style={{ left: `${(x(hover) / W) * 100}%`, transform: `translateX(${hover > n / 2 ? 'calc(-100% - 8px)' : '8px'})` }}
+        >
+          {tip?.(hover)}
+          <div className="mt-1 grid grid-cols-[auto_1fr] gap-x-3">
+            {series.map((s) =>
+              s.values[hover] != null ? (
+                <span key={s.key} className="contents">
+                  <span className="inline-flex items-center gap-1.5 text-muted">
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.color }} />
+                    {s.label}
+                  </span>
+                  <span className="num text-right text-ink">{format(s.values[hover]!)}</span>
+                </span>
+              ) : null,
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface Pt {
   x: number;
@@ -25,7 +130,7 @@ interface Pt {
 }
 
 /** Single-series line with crosshair + tooltip. One y-axis only. */
-export function LineChart({ points, height = 160, title, format = (v: number) => String(v), baseline }: { points: Pt[]; height?: number; title: string; format?: (v: number) => string; baseline?: number }) {
+export function LineChart({ points, height = 160, title, format = (v: number) => String(v), baseline, marks }: { points: Pt[]; height?: number; title: string; format?: (v: number) => string; baseline?: number; marks?: { index: number; label?: string }[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const [box, W] = useWidth<HTMLDivElement>(560);
   const H = height;
@@ -64,6 +169,16 @@ export function LineChart({ points, height = 160, title, format = (v: number) =>
           </g>
         ))}
         {baseline != null && <line x1={pad.l} x2={W - pad.r} y1={y(baseline)} y2={y(baseline)} stroke="rgba(236,232,225,0.25)" strokeDasharray="3 3" />}
+        {marks?.filter((m) => m.index > 0).map((m) => (
+          <g key={m.index}>
+            <line x1={x(m.index)} x2={x(m.index)} y1={pad.t} y2={H - pad.b} stroke="rgba(236,232,225,0.22)" strokeDasharray="2 3" />
+            {m.label && (
+              <text x={x(m.index) + 4} y={pad.t + 10} fontSize="10" fill={CHART.axis}>
+                {m.label}
+              </text>
+            )}
+          </g>
+        ))}
         <path d={d} fill="none" stroke={CHART.series} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
         {hover != null && (
           <>

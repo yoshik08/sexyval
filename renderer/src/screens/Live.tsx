@@ -214,7 +214,7 @@ function AllyCard({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<t
         </div>
         {!hidden && (
           <ExpandPanel open={open}>
-            <PlayerDetail p={p} narrow />
+            <PlayerDetail p={p} narrow open={open} />
           </ExpandPanel>
         )}
       </div>
@@ -340,7 +340,7 @@ function PlayerLine({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType
       </div>
       {!hidden && (
         <ExpandPanel open={open}>
-          <PlayerDetail p={p} />
+          <PlayerDetail p={p} open={open} />
         </ExpandPanel>
       )}
     </div>
@@ -388,7 +388,7 @@ function InGame({ v }: { v: CoreGameView }) {
         </div>
       </div>
       <div className="flex items-center justify-between gap-4 px-6 pt-5 xl:px-8">
-        <p className="text-xs text-faint">Click a player for ranks, SV Score and their last five matches. Hidden players are not looked up.</p>
+        <p className="text-xs text-faint">Click a player for ranks, SV Score, their last five, lifetime stats and estimated MMR. Hidden players are not looked up.</p>
         <DensityToggle />
       </div>
       <div ref={wrap} className="grid grid-cols-2 items-start gap-4 px-6 py-5 xl:gap-5 xl:px-8">

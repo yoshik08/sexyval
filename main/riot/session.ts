@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { parseLockfile, type Lockfile } from '../../shared/lockfile';
-import { glzUrl, hasValorantSession, parseExternalSessions, parseShooterLog, pdUrl } from '../../shared/region';
+import { glzUrl, hasValorantSession, normalizeShard, parseExternalSessions, parseShooterLog, pdUrl } from '../../shared/region';
 import {
   chooseRegion,
   pickTokenSource,
@@ -352,12 +352,23 @@ export class RiotSession {
     return this.opts.overridePd ?? pdUrl(this.shard);
   }
 
+  /** pd base for another account's region (store sync for every signed-in account). */
+  pdBaseFor(region: string): string {
+    return this.opts.overridePd ?? pdUrl(normalizeShard(region));
+  }
+
   headers(): Record<string, string> {
     if (!this.active || !this.version) throw new WaitingError('Not authenticated');
+    return this.headersFor(this.active);
+  }
+
+  /** Same headers with another account's tokens (never stored; built per request). */
+  headersFor(t: { accessToken: string; entitlement: string }): Record<string, string> {
+    if (!this.version) throw new WaitingError('Not authenticated');
     const platform = { ...CLIENT_PLATFORM_BASE, platformType: this.opts.platformType?.() ?? 'PC' };
     return {
-      Authorization: `Bearer ${this.active.accessToken}`,
-      'X-Riot-Entitlements-JWT': this.active.entitlement,
+      Authorization: `Bearer ${t.accessToken}`,
+      'X-Riot-Entitlements-JWT': t.entitlement,
       'X-Riot-ClientVersion': this.version,
       'X-Riot-ClientPlatform': Buffer.from(JSON.stringify(platform)).toString('base64'),
       'User-Agent': USER_AGENT,
