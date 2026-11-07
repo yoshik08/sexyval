@@ -17,8 +17,11 @@ function useWidth<T extends HTMLElement>(fallback: number) {
 // Chart colors validated with the dataviz palette script against the panel surface (#11161d):
 // gain/loss diverging pair passes lightness, chroma, CVD and contrast checks.
 export const CHART = { series: '#29a894', gain: '#29a894', loss: '#ff4655', grid: 'rgba(236,232,225,0.07)', axis: '#5f6875' };
-/** Fixed categorical order for multi-line charts (validated on #0b0b0d: lightness, chroma, CVD ΔE ≥ 13, contrast). */
-export const SERIES = ['#7b7be0', '#b87a1e', '#29a894'] as const;
+/** Fixed categorical order for multi-line charts (validated on #0b0b0d: lightness, chroma, CVD ΔE ≥ 13, contrast).
+ * Slot 4 (blue) re-validated with the first three on #0b0b0d: worst adjacent CVD ΔE 13.0, normal-vision 17.5. */
+export const SERIES = ['#7b7be0', '#b87a1e', '#29a894', '#3987e5'] as const;
+/** Ordinal ramp (one achromatic hue, light end 2.9:1 on #0b0b0d; validated --ordinal): stack size, solo → 5-stack. */
+export const STACK_RAMP = ['#5c5c5c', '#8a8a8a', '#b8b8b8', '#ececec'] as const;
 
 export interface Series {
   key: string;
@@ -29,8 +32,15 @@ export interface Series {
   dashed?: boolean;
 }
 
+/** Optional point markers on one series, coloured per point (e.g. stack size), with their own legend. */
+export interface Markers {
+  series: string;
+  colors: (string | undefined)[];
+  legend: { label: string; color: string }[];
+}
+
 /** Several lines on one y-axis with a legend, a crosshair and one tooltip listing every series. */
-export function MultiLineChart({ series, height = 220, title, format = (v: number) => String(v), tip, yTicks }: { series: Series[]; height?: number; title: string; format?: (v: number) => string; tip?: (i: number) => React.ReactNode; yTicks?: number[] }) {
+export function MultiLineChart({ series, height = 220, title, format = (v: number) => String(v), tip, yTicks, markers }: { series: Series[]; height?: number; title: string; format?: (v: number) => string; tip?: (i: number) => React.ReactNode; yTicks?: number[]; markers?: Markers }) {
   const [hover, setHover] = useState<number | null>(null);
   const [box, W] = useWidth<HTMLDivElement>(720);
   const H = height;
@@ -65,6 +75,16 @@ export function MultiLineChart({ series, height = 220, title, format = (v: numbe
             {s.label}
           </span>
         ))}
+        {markers && (
+          <span className="inline-flex items-center gap-2.5">
+            {markers.legend.map((m) => (
+              <span key={m.label} className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full" style={{ background: m.color }} />
+                {m.label}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
@@ -91,6 +111,10 @@ export function MultiLineChart({ series, height = 220, title, format = (v: numbe
         {series.map((s) => (
           <path key={s.key} d={path(s.values)} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" strokeDasharray={s.dashed ? '4 4' : undefined} />
         ))}
+        {markers &&
+          (series.find((s) => s.key === markers.series)?.values ?? []).map((v, i) =>
+            v != null && markers.colors[i] ? <circle key={i} cx={x(i)} cy={y(v)} r="4" fill={markers.colors[i]} stroke="#0b0b0d" strokeWidth="2" /> : null,
+          )}
         {hover != null && (
           <>
             <line x1={x(hover)} x2={x(hover)} y1={pad.t} y2={H - pad.b} stroke="rgba(236,232,225,0.25)" />

@@ -26,6 +26,8 @@ export class RiotApi {
   readonly glzLimiter = new RateLimiter({ concurrency: 2 });
   readonly pdLimiter = new RateLimiter({ concurrency: 4 });
   private lastForcedRefresh = 0;
+  /** pd requests started (each call, plus the resend after a token refresh). Debug counts only. */
+  pdCalls = 0;
 
   constructor(
     readonly session: RiotSession,
@@ -39,12 +41,14 @@ export class RiotApi {
         limiter,
         maxRetries: retries,
       });
+    if (kind === 'pd') this.pdCalls++;
     let res = await send();
     if ((res.status === 400 || res.status === 401) && Date.now() - this.lastForcedRefresh > 30_000) {
       this.lastForcedRefresh = Date.now();
       log.warn(`${res.status} on ${safePath(res.url)}, refreshing tokens`);
       this.session.invalidateAuth();
       await this.session.refreshAuth();
+      if (kind === 'pd') this.pdCalls++;
       res = await send();
     }
     return res;

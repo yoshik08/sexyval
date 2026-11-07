@@ -58,6 +58,25 @@ export function staggerIn(container: HTMLElement | null, selector = '[data-row]'
   gsap.fromTo(items, { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.42, ease: EASE_OUT, stagger: 0.035, clearProps: 'opacity,transform' });
 }
 
+/**
+ * FLIP re-order. Call before the list re-renders in its new order: it measures every `[data-flip]` child
+ * and returns a function to call once the DOM shows the new order, which slides each one from where it
+ * was (≤ 240 ms, one ease-out). Reduced motion: no-op.
+ */
+export function flipCapture(container: HTMLElement | null, selector = '[data-flip]'): () => void {
+  if (!container || reducedMotion()) return () => undefined;
+  const before = new Map<string, number>();
+  container.querySelectorAll<HTMLElement>(selector).forEach((el) => before.set(el.dataset.flip ?? '', el.getBoundingClientRect().top));
+  return () => {
+    container.querySelectorAll<HTMLElement>(selector).forEach((el) => {
+      const was = before.get(el.dataset.flip ?? '');
+      if (was == null) return;
+      const dy = was - el.getBoundingClientRect().top;
+      if (Math.abs(dy) >= 1) gsap.fromTo(el, { y: dy }, { y: 0, duration: 0.24, ease: EASE_OUT, clearProps: 'transform' });
+    });
+  };
+}
+
 /** Agent lock-in: brief flash + settle. Rare event, so it may be a little expressive. */
 export function lockIn(card: HTMLElement | null): void {
   if (!card || reducedMotion()) return;

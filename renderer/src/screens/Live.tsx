@@ -44,7 +44,14 @@ function QueueBanner({ q }: { q: QueueView }) {
       <div className="flex min-w-0 items-center gap-3.5">
         <span className="pulse-dot h-2.5 w-2.5 shrink-0 rounded-full bg-win" />
         <div className="min-w-0">
-          <div className="t-head text-lg text-ink">In queue · {q.queueName}</div>
+          <div className="flex items-center gap-2.5">
+            <span className="t-head text-lg text-ink">In queue · {q.queueName}</span>
+            {q.rrPenalty != null && q.rrPenalty > 0 && (
+                  <span data-rr-penalty className="rounded-full bg-loss/[0.14] px-2.5 py-1 text-2xs font-semibold text-loss" title="Riot’s RR penalty for this party (SkillDisparityRRPenalty): every player earns and loses this much less RR">
+                    RR −{Math.round(q.rrPenalty * 100)}%
+                  </span>
+                )}
+          </div>
           <div className="text-pretty mt-0.5 text-sm text-muted">Agent select opens here the moment a match is found.</div>
         </div>
       </div>

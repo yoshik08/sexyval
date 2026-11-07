@@ -6,12 +6,14 @@ import type { NameService } from './history';
 import { assetUrl } from './assets';
 import { HttpError } from '../riot/http';
 import { parsePartyCore } from '../../shared/party';
+import { log } from '../log';
 
 const enc = encodeURIComponent;
 
 /** Party + matchmaking. Every mutation is a manual button press from the UI. */
 export class PartyService {
   view: PartyView = { status: 'idle', eligibleQueues: [], members: [], requests: [], preferredPods: [], isOwner: false };
+  private lastPenaltyRaw: unknown = Symbol('unset');
 
   constructor(
     private readonly api: RiotApi,
@@ -44,6 +46,11 @@ export class PartyService {
       await this.names.waitFor(members.map((m) => m.Subject).filter(Boolean));
       const cards = this.catalog.catalog.cards;
       const core = parsePartyCore(j);
+      // Riot's scale for this field is unverified (fraction or percent): the raw value goes to the log once per change.
+      if (core.rrPenaltyRaw !== this.lastPenaltyRaw) {
+        this.lastPenaltyRaw = core.rrPenaltyRaw;
+        log.debug(`party SkillDisparityRRPenalty raw=${JSON.stringify(core.rrPenaltyRaw)} -> ${core.rrPenalty ?? 'n/a'}`);
+      }
       this.view = {
         status: 'ready',
         partyId,
@@ -54,6 +61,7 @@ export class PartyService {
         inviteCode: core.inviteCode,
         preferredPods: core.preferredPods,
         queueEntryTime: core.queueEntryTime,
+        rrPenalty: core.rrPenalty,
         isOwner: members.some((m) => m.Subject === me && m.IsOwner === true),
         members: members.map((m) => {
           const n = this.names.get(m.Subject);

@@ -30,5 +30,6 @@ export const log = {
   info: (...p: unknown[]) => push('INFO', p),
   warn: (...p: unknown[]) => push('WARN', p),
   error: (...p: unknown[]) => push('ERR ', p),
+  debug: (...p: unknown[]) => push('DBG ', p),
   tail: (n = 200) => lines.slice(-n),
 };

@@ -2,8 +2,8 @@
 // content, party and local chat/friends. Shapes follow the LIVE API, including what it no longer has:
 // personalization v2 and /store/v1/offers answer 404 exactly like production, so the app cannot lean on them.
 import type http from 'node:http';
-import { AGENTS, ME, nameFor, rng, uuid } from './data';
-import { updateJson, type CareerMatch } from './career';
+import { AGENTS, ME, nameFor, rng, SQUAD, uuid } from './data';
+import { updateJson, type CareerMatch, type SquadMode } from './career';
 import fixtures from './fixtures/collection.json';
 
 const fx: any = fixtures;
@@ -38,6 +38,8 @@ export interface ExtraCtx {
   /** A player's matches, newest first (mock/career.ts). */
   career(puuid: string): CareerMatch[];
   bootAt: number;
+  /** MOCK_SQUAD: with the squad on your party is your squad; 'penalty' is a 5-stack Riot docks RR for. */
+  squad: SquadMode;
 }
 
 export function createExtra(ctx: ExtraCtx) {
@@ -52,7 +54,7 @@ export function createExtra(ctx: ExtraCtx) {
     code: '',
     state: 'DEFAULT',
     ready: true,
-    members: [ME, friendsList[0], friendsList[2]],
+    members: ctx.squad === 'off' ? [ME, friendsList[0], friendsList[2]] : ctx.squad === 'penalty' ? [ME, SQUAD.drain, SQUAD.carry, SQUAD.neutral, SQUAD.five] : [ME, SQUAD.drain, SQUAD.carry],
     requests: [{ ID: uuid('req-1'), PartyID: partyId, RequestedBySubject: friendsList[5], Subjects: [friendsList[5]], CreatedAt: new Date().toISOString(), RefreshedAt: new Date().toISOString(), ExpiresIn: 600 }],
     queueEntry: '0001-01-01T00:00:00Z',
   };
@@ -116,7 +118,8 @@ export function createExtra(ctx: ExtraCtx) {
     ClientVersion: 'release-13.09-shipping-11-5777412',
     Members: party.members.map((m, i) => ({
       Subject: m,
-      CompetitiveTier: 14 + i * 3,
+      // Squad members show the rank their career ends on; the 1.3 friends keep their fixed tiers.
+      CompetitiveTier: ctx.squad !== 'off' ? (ctx.career(m).find((x) => x.queue === 'competitive')?.tierAfter ?? 14) : 14 + i * 3,
       PlayerIdentity: { Subject: m, PlayerCardID: fx.owned.cards[i % fx.owned.cards.length], PlayerTitleID: fx.owned.titles[0], AccountLevel: 90 + i * 40, PreferredLevelBorderID: '', Incognito: false, HideAccountLevel: false },
       SeasonalBadgeInfo: null,
       IsOwner: i === 0,
@@ -136,7 +139,7 @@ export function createExtra(ctx: ExtraCtx) {
     StateTransitionReason: '',
     Accessibility: party.accessibility,
     CustomGameData: null,
-    MatchmakingData: { QueueID: party.queue, PreferredGamePods: ['aresriot.aws-euc1-prod.eu-gp-frankfurt-1'], SkillDisparityRRPenalty: 0 },
+    MatchmakingData: { QueueID: party.queue, PreferredGamePods: ['aresriot.aws-euc1-prod.eu-gp-frankfurt-1'], SkillDisparityRRPenalty: ctx.squad === 'penalty' ? 0.25 : 0 },
     Invites: null,
     Requests: party.requests,
     QueueEntryTime: ctx.queueSince() != null ? new Date(ctx.queueSince()!).toISOString() : party.queueEntry,

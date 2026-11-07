@@ -3,6 +3,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import type { MockHandle, MockPhase } from '../mock/server';
 import { PERSONA } from '../mock/career';
+import { ME } from '../mock/data';
 import { log } from './log';
 
 interface Step {
@@ -17,6 +18,8 @@ interface Step {
   check?: string;
   /** Capture the agent-select overlay window instead of the main window. */
   overlay?: boolean;
+  /** Only when MOCK_SQUAD has this value (squad variants need their own run). */
+  squad?: string;
 }
 
 const ESC = `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));`;
@@ -24,6 +27,8 @@ const VIDEO_CHECK = `(() => { const v = document.querySelector('[role=dialog] vi
 const setS = (patch: Record<string, unknown>) => `window.sexyval.setSettings(${JSON.stringify(patch)});`;
 /** Types the mock HenrikDev key into Settings → Accounts and presses Save, like a user would. */
 const TYPE_KEY = `(() => { const i = document.querySelector('[data-henrik-key]'); if (!i) return; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, 'HDEV-mock-0000-key'); i.dispatchEvent(new Event('input', { bubbles: true })); setTimeout(() => i.form.requestSubmit(), 150); })();`;
+/** Clicks the MMR tab's Solo / Team control once it has rendered (the setting is saved like a user's click). */
+const pickView = (label: string) => `(() => { let n = 0; const go = () => { const b = [...document.querySelectorAll('[role=tab]')].find((x) => x.textContent.trim() === ${JSON.stringify(label)}); if (b) b.click(); else if (n++ < 60) setTimeout(go, 150); }; go(); })();`;
 const clickTab = (label: string) => `[...document.querySelectorAll('[role=tab]')].find((b) => b.textContent.trim().startsWith(${JSON.stringify(label)}))?.click();`;
 
 const STEPS: Step[] = [
@@ -46,12 +51,19 @@ const STEPS: Step[] = [
   { name: '17-hub-leaderboard', nav: 'hub:leaderboard', wait: 3500 },
   { name: '18-hub-agents', nav: 'hub:agents', wait: 3500 },
   // 1.3: estimated MMR per persona (you: well above rank), lifetime profiles, store archive + calendar.
-  { name: '27a-mmr-above-rank', nav: 'mmr', wait: 7000, check: `document.querySelector('[data-mmr] .t-title')?.textContent` },
+  { name: '27a-mmr-above-rank', nav: 'mmr', wait: 7000, js: pickView('Solo view'), check: `document.querySelector('[data-mmr] .t-title')?.textContent` },
   { name: '27b-mmr-graph-hover', wait: 1200, js: `(() => { const s = document.querySelector('[data-mmr] svg[role=img]'); if (!s) return; const r = s.getBoundingClientRect(); s.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: r.left + r.width * 0.7, clientY: r.top + r.height / 2 })); s.scrollIntoView({ block: 'center' }); })();` },
   { name: '27c-mmr-at-rank', nav: `mmr:${PERSONA.at}`, wait: 6000 },
   { name: '27d-mmr-below-rank', nav: `mmr:${PERSONA.below}`, wait: 6000 },
   { name: '27e-mmr-mostly-excluded', nav: `mmr:${PERSONA.excluded}`, wait: 6000, js: `setTimeout(() => document.querySelector('[data-mmr] > section:last-of-type')?.scrollIntoView({ block: 'end' }), 4000);` },
-  { name: '28a-lifetime-tracker-private', nav: `profiles:${PERSONA.trackerPrivate}`, wait: 11000, check: `document.querySelector('[data-lifetime]') ? 'lifetime shown' : 'no lifetime'` },
+  // 1.4: team view of your MMR (the mock squad: MOCK_SQUAD, default on).
+  { name: '27f-mmr-team-headline', nav: `mmr:${ME}`, wait: 9000, js: `${pickView('Team view')} document.querySelector('main [class*=overflow-y-auto]')?.scrollTo(0, 0);`, check: `[document.querySelector('[data-mmr-team] .t-title')?.textContent, document.querySelectorAll('[data-squad-row]').length]` },
+  { name: '27g-mmr-stacks', wait: 1200, js: `document.querySelector('[data-stacks]')?.scrollIntoView({ block: 'start' }); document.querySelector('main')?.scrollBy?.(0, -24);` },
+  { name: '27h-mmr-squad', wait: 1200, js: `document.querySelector('[data-squad]')?.scrollIntoView({ block: 'start' });`, check: `[...document.querySelectorAll('[data-squad-row] .t-head, [data-squad-row] span.rounded-full')].map((e) => e.textContent).join(' | ').slice(0, 300)` },
+  { name: '27i-mmr-squad-expanded', wait: 1500, js: `(() => { const b = document.querySelector('[data-squad-row] button[aria-expanded]'); b?.click(); setTimeout(() => b?.closest('[data-squad-row]')?.scrollIntoView({ block: 'start' }), 350); })();` },
+  { name: '27j-mmr-team-graph', wait: 1500, js: `(() => { const s = document.querySelector('[data-mmr-team] svg[role=img]'); if (!s) return; s.scrollIntoView({ block: 'center' }); setTimeout(() => { const r = s.getBoundingClientRect(); s.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: r.left + r.width * 0.62, clientY: r.top + r.height / 2 })); }, 300); })();` },
+  { name: '27k-mmr-solo-only', squad: 'solo', nav: `mmr:${ME}`, wait: 8000, js: pickView('Team view') },
+  { name: '28a-lifetime-tracker-private', nav: `profiles:${PERSONA.trackerPrivate}`, wait: 11000, js: setS({ mmrView: 'auto' }), check: `document.querySelector('[data-lifetime]') ? 'lifetime shown' : 'no lifetime'` },
   { name: '28b-lifetime-matches', wait: 1500, js: `document.querySelector('[data-lifetime] > section:last-of-type')?.scrollIntoView({ block: 'end' });` },
   { name: '29a-shop-past-bundles', nav: 'shop:past', wait: 5000 },
   { name: '29b-shop-history-calendar', nav: 'shop:history', wait: 4000 },
@@ -60,6 +72,7 @@ const STEPS: Step[] = [
   { name: '19-live-idle', phase: 'idle', nav: 'live', wait: 7000, js: ESC },
   { name: '19b-live-queue', phase: 'queue', elapsed: 83, nav: 'live', wait: 3500, check: `document.querySelector('[data-queue-time]')?.textContent` },
   { name: '20-party', nav: 'party', wait: 4500 },
+  { name: '20b-party-rr-penalty', squad: 'penalty', nav: 'party', wait: 4500, check: `document.querySelector('[data-rr-penalty]')?.textContent` },
   // Queue pops: the overlay shows "Match found" before the map is known (the mock fills MapID after 1.5 s).
   { name: '21a-overlay-match-found', phase: 'pregame', elapsed: 0, nav: 'live', wait: 700, overlay: true },
   { name: '21-agent-select', phase: 'pregame', elapsed: 22, nav: 'live', wait: 7000 },
@@ -104,7 +117,8 @@ export async function runScreenshots(win: BrowserWindow, mock: MockHandle, pollN
   const only = process.env.SEXYVAL_SHOT_ONLY;
   // Dev aid: SEXYVAL_STEPS=<file.json> runs a custom list of steps (same shape as STEPS) instead.
   const steps: Step[] = process.env.SEXYVAL_STEPS ? JSON.parse(await fs.readFile(process.env.SEXYVAL_STEPS, 'utf8')) : STEPS;
-  for (const s of steps.filter((x) => !only || only.split(',').some((o) => x.name.startsWith(o)))) {
+  const squad = process.env.MOCK_SQUAD ?? 'on';
+  for (const s of steps.filter((x) => (!only || only.split(',').some((o) => x.name.startsWith(o))) && (!x.squad || x.squad === squad))) {
     if (s.phase) mock.setPhase(s.phase, (s.elapsed ?? 0) * 1000);
     if (s.nav) win.webContents.send('nav', s.nav);
     pollNow();

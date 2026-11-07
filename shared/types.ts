@@ -33,6 +33,8 @@ export interface QueueView {
   queueName: string;
   /** When matchmaking started (party QueueEntryTime), ms. */
   enteredAt?: number;
+  /** Party RR penalty (SkillDisparityRRPenalty, 0–1). */
+  rrPenalty?: number;
 }
 
 export interface AgentInfo {
@@ -238,6 +240,8 @@ export interface Settings {
   henrikKey: string;
   /** Live player rows: auto = compact when narrow or 10 players in game. */
   liveDensity: LiveDensity;
+  /** MMR tab: Solo or Team view; auto = Team when your window has stacked games. */
+  mmrView: 'auto' | 'solo' | 'team';
   /** Silent background updates (installed build only; the portable build can't self-update). */
   autoUpdate: boolean;
   /** Stretched resolution while Valorant runs (Settings → Stretch). */

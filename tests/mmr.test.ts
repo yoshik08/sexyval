@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { climbSentence, estimateMmr, excludeReason, factsFromDetails, fit3, gapLabel, lobbyAverage, MAX_TIER, MIN_TIER, parseUpdate, RR_PER_DIVISION, type CompUpdate, type MatchFacts, type MmrInput } from '../shared/mmr';
+import { teamFactsFromDetails, type TeamFacts } from '../shared/team';
+import { matchDetails, mates } from './teamFixtures';
 
 const ACT = 'act-now';
 const DAY = 86400_000;
@@ -203,5 +205,130 @@ describe('shared/mmr: lobby average', () => {
     expect(f.otherTiers).toHaveLength(9);
     expect(lobbyAverage(f.otherTiers)).toBe((11 + 12 + 13 + 14 + 15 + 16 + 17 + 18 + 19) / 9);
     expect(f).toMatchObject({ result: 'W', roundDiff: 6, totalRounds: 20, acs: 150, partySize: 2, score: '13-7' });
+  });
+});
+
+// ---------- 1.4: team mode (MmrInput.team). Everything above runs without team data, unchanged. ----------
+
+interface TeamSpec extends Spec {
+  /** Party size per match index (default solo). */
+  stack?: (i: number) => 1 | 2 | 3 | 5;
+  /** Premades' rank (default: the lobby tier). */
+  friendTier?: number;
+  /** RR multiplier in 5-stacks (a penalty). */
+  fiveFactor?: number;
+  /** Randoms' and enemies' tier per match (default: the persona's lobby). */
+  lobbyAt?: (i: number) => number;
+  /** Matches with no party data (details cached before partyId existed). */
+  noParty?: (i: number) => boolean;
+}
+
+/** persona() plus team facts from synthetic details: a lobby balanced around `lobbyAt(i)`, your premades first. */
+function teamPersona(s: TeamSpec): MmrInput {
+  const input = persona(s);
+  const team: Record<string, TeamFacts | undefined> = {};
+  input.updates.forEach((u, i) => {
+    const f = input.facts[u.matchId]!;
+    const n = s.stack?.(i) ?? 1;
+    const L = s.lobbyAt?.(i) ?? s.lobby;
+    const prem = Array.from({ length: n - 1 }, (_, k) => ({ id: `friend-${k}`, tier: s.friendTier ?? L }));
+    const d = matchDetails({ id: u.matchId, me: 'me', myTier: s.myTier ?? 14, myAcs: f.acs, mates: mates(L, prem, u.matchId), enemies: [L, L, L, L, L], win: f.result === 'W', margin: Math.abs(f.roundDiff), partyData: !s.noParty?.(i) });
+    team[u.matchId] = teamFactsFromDetails(d, 'me');
+    f.otherTiers = d.players.filter((p) => p.subject !== 'me').map((p) => p.tier ?? 0);
+    f.partySize = s.noParty?.(i) ? undefined : n;
+    if (n === 5 && s.fiveFactor) u.rrEarned = Math.round(u.rrEarned * s.fiveFactor);
+  });
+  return { ...input, team, puuid: 'me' };
+}
+
+describe('shared/mmr 1.4: team mode', () => {
+  it('without team data nothing changes: no team summary, same numbers', () => {
+    const input = persona({ win: 22, loss: -14, lobby: 15 });
+    const a = estimateMmr(input);
+    expect(a.team).toBeUndefined();
+    expect(a.matches[0].stack).toBeUndefined();
+    expect(estimateMmr({ ...input, team: undefined })).toEqual(a);
+  });
+
+  it('solo-only data reproduces the 1.3 estimate (within 0.3 divisions), noisy lobbies and an outlier included', () => {
+    for (const spec of [
+      { win: 25, loss: -12, lobby: 16 },
+      { win: 19, loss: -18, lobby: 14 },
+      { win: 13, loss: -24, lobby: 11 },
+      { win: 22, loss: -15, lobby: 12, myTier: 15 }, // lobby and split disagree
+    ]) {
+      const lobbyAt = (i: number) => spec.lobby + (((i * 5) % 7) - 3) * 0.4 + (i === 7 ? 6 : 0);
+      const input = teamPersona({ ...spec, lobbyAt });
+      const t = estimateMmr(input);
+      const old = estimateMmr({ ...input, team: undefined });
+      expect(Math.abs(t.estTierDecimal - old.estTierDecimal)).toBeLessThanOrEqual(0.3);
+      expect(t.team!.wTeamUsed).toBe(0.6);
+      expect(t.team!.stackedShare).toBe(0);
+    }
+  });
+
+  it('a duo with a lower-ranked friend: the raw lobby drags the 1.3 estimate down, the team estimate corrects it', () => {
+    // Your MMR ~16 (wins +25 / losses −12 at Gold 3), always with a Gold 1 friend; the lobby fills around 14.5.
+    const input = teamPersona({ win: 25, loss: -12, lobby: 14.5, stack: () => 2, friendTier: 13 });
+    const solo = estimateMmr({ ...input, team: undefined });
+    const team = estimateMmr(input);
+    expect(solo.lobbyAvg!).toBeLessThan(14.5);
+    expect(team.team!.teamSignal!).toBeCloseTo(16, 1);
+    expect(team.estTierDecimal).toBeGreaterThan(solo.estTierDecimal + 0.5);
+    expect(team.team!.lobbyAvgStacked).toBeCloseTo(14.3, 1);
+    expect(team.team!.stackedShare).toBe(1);
+    expect(team.team!.wSplitUsed + team.team!.wTeamUsed).toBeCloseTo(1, 2);
+    expect(team.matches[0]).toMatchObject({ stack: 2, premades: ['friend-0'], impliedMe: 16 });
+    // The friend's own estimated MMR (12, below their rank) replaces their rank as the proxy.
+    const withMmr = estimateMmr({ ...input, premadeMmr: { 'friend-0': 12 } });
+    expect(withMmr.team!.teamSignal!).toBeCloseTo(17, 1);
+  });
+
+  it('5-stacks with a 25% RR cut: measured, rescaled and kept', () => {
+    const spec: TeamSpec = { win: 20, loss: -20, lobby: 14, n: 24, margin: 0.5, stack: (i) => (i % 4 < 2 ? 5 : 1), fiveFactor: 0.75 };
+    const t = estimateMmr(teamPersona(spec));
+    const old = estimateMmr({ ...teamPersona(spec), team: undefined });
+    expect(old.matches.filter((m) => m.excluded === '5-stack')).toHaveLength(12);
+    expect(Math.abs(t.team!.stackPenalty.five! - 0.75)).toBeLessThanOrEqual(0.05);
+    expect(t.team!.stackPenalty.source).toBe('measured');
+    const fives = t.matches.filter((m) => m.stack === 5);
+    expect(fives.every((m) => !m.excluded && /^5-stack · RR ×0\.7\d \(penalty\)$/.test(m.tag))).toBe(true);
+    expect(t.usable).toBe(24);
+    // Undone: the cleaned split matches what solo games alone say.
+    expect(Math.abs(t.Gw - old.Gw)).toBeLessThan(1.5);
+    expect(Math.abs(t.Gl - old.Gl)).toBeLessThan(1.5);
+    expect(Math.abs(t.GwRaw - old.GwRaw)).toBeLessThan(1.5);
+  });
+
+  it('5-stacks without a penalty are kept as they are; with too few samples they stay excluded', () => {
+    const none = estimateMmr(teamPersona({ win: 20, loss: -20, lobby: 14, n: 24, margin: 0.5, stack: (i) => (i % 4 < 2 ? 5 : 1) }));
+    expect(none.matches.filter((m) => m.stack === 5).every((m) => !m.excluded && m.tag === '5-stack · no penalty seen' && m.fiveScale === 1)).toBe(true);
+    const few = estimateMmr(teamPersona({ win: 20, loss: -20, lobby: 14, n: 24, stack: (i) => (i < 4 ? 5 : 1), fiveFactor: 0.75 }));
+    expect(few.matches.filter((m) => m.excluded === '5-stack')).toHaveLength(4);
+    expect(few.team!.stackPenalty.source).toBe('none');
+    expect(few.team!.stackPenalty.five).toBeUndefined();
+  });
+
+  it('the live party penalty changes only the next-match forecast', () => {
+    const input = teamPersona({ win: 24, loss: -12, lobby: 16 });
+    const plain = estimateMmr(input);
+    const pen = estimateMmr({ ...input, livePartyPenalty: 0.25 });
+    expect(pen.estTierDecimal).toBe(plain.estTierDecimal);
+    expect(pen.forecast.rrFactor).toBe(0.75);
+    expect(pen.forecast.winsToNext).toBe(Math.ceil((100 - 64) / (pen.GwRaw * 0.75)));
+    expect(pen.forecast.lossCost).toBe(Math.round(pen.GlRaw * 0.75));
+    expect(pen.team!.stackPenalty).toMatchObject({ party: 0.25, source: 'party-field' });
+    expect(plain.forecast.rrFactor).toBeUndefined();
+  });
+
+  it('stack breakdown covers the window; matches without party data are "unknown" and kept out of the squad', () => {
+    const e = estimateMmr(teamPersona({ win: 20, loss: -18, lobby: 14, stack: (i) => ([1, 2, 3, 5] as const)[i % 4], noParty: (i) => i % 5 === 0 }));
+    const t = e.team!;
+    expect(t.window).toBe(20);
+    expect(t.stacks.reduce((a, s) => a + s.games, 0)).toBe(t.window);
+    expect(t.stacks.find((s) => s.stack === 'unknown')!.games).toBe(4);
+    expect(t.noPartyData).toBe(4);
+    expect(t.ridge!.n).toBe(16);
+    expect(e.matches.filter((m) => m.stack === 'unknown')).toHaveLength(4);
   });
 });

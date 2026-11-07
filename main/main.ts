@@ -26,6 +26,7 @@ import { AccountManager, REAL_AUTH_URLS, type AuthUrls } from './auth/accounts';
 import { GameLoop } from './loop';
 import { MmrService } from './services/mmr';
 import { MmrEstimateService } from './services/mmrEstimate';
+import { SquadService } from './services/squad';
 import { LifetimeService } from './services/lifetime';
 import { StoreArchive } from './services/bundles';
 import { StoreSync } from './services/storeSync';
@@ -365,6 +366,7 @@ async function startServices(): Promise<void> {
   const hiddenInMatch = (p: string) => loop?.isHidden(p) ?? false;
   const mmrEstimate = new MmrEstimateService(api, assets, catalog, history, names, profiles, dataDir('mmr-updates'), hiddenInMatch);
   const lifetime = new LifetimeService(api, assets, catalog, history, profiles, hiddenInMatch);
+  const squad = new SquadService({ api, assets, catalog, history, names, profiles, mmr: mmrEstimate, isHidden: hiddenInMatch, livePenalty: () => loop?.partyPenalty(), onUpdate: (v) => send('mmr-team', v) });
   const hub = new HubService(api, assets, catalog, dataDir('lineups.json'), dataDir('lineups'));
   handleLocal(dataDir('lineups'));
 
@@ -534,6 +536,7 @@ async function startServices(): Promise<void> {
     'profile:match': (id: unknown) => profiles.matchDetail(str(id, 64)),
     'mmr:get': (q: unknown, force: unknown) => mmrEstimate.get(str(q, 64), force === true),
     'mmr:chip': (p: unknown) => mmrEstimate.chip(str(p, 64)),
+    'mmr:team': (q: unknown, force: unknown) => squad.get(str(q, 64), force === true),
     'lifetime:get': (p: unknown, count: unknown) => lifetime.get(str(p, 64), Number(count) || 20),
     'hub:friends': () => hub.friends(),
     'hub:friendRequest': (nt: unknown) => hub.sendFriendRequest(str(nt, 64)),

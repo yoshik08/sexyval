@@ -1,5 +1,6 @@
 // Party fields both the Party screen and the live loop need. One parser, so the loop's
 // "are we queuing?" check and the Party screen can never disagree.
+import { normalisePenalty } from './team';
 
 export interface PartyCore {
   state?: string;
@@ -13,6 +14,10 @@ export interface PartyCore {
   /** QueueEntryTime in ms, only when it is a real time (Riot sends 0001-01-01 when not queuing). */
   queueEntryAt?: number;
   matchmaking: boolean;
+  /** MatchmakingData.SkillDisparityRRPenalty as a 0–1 fraction (unverified scale: > 1 is read as a percentage). */
+  rrPenalty?: number;
+  /** The raw value, for Debug. */
+  rrPenaltyRaw?: unknown;
 }
 
 /** Riot uses "0001-01-01T00:00:00Z" for "never"; anything before 2010 is treated as unset. */
@@ -35,5 +40,7 @@ export function parsePartyCore(j: any): PartyCore {
     queueEntryTime,
     queueEntryAt: parseQueueEntryTime(queueEntryTime),
     matchmaking: state === 'MATCHMAKING',
+    rrPenalty: normalisePenalty(j?.MatchmakingData?.SkillDisparityRRPenalty),
+    rrPenaltyRaw: j?.MatchmakingData?.SkillDisparityRRPenalty,
   };
 }

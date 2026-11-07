@@ -113,7 +113,7 @@ describe('lifetime + estimated MMR against the mock', () => {
     const me = await est.get(ME);
     expect(me.estimate.gapDivisions).toBeGreaterThan(0.5);
     expect(['above rank', 'well above rank']).toContain(me.estimate.label);
-    expect(me.matches.length).toBe(20);
+    expect(me.matches.length).toBe(25); // 1.4: two pages, 0–20 and 20–25
     expect((await est.get(PERSONA.at)).estimate.label).toBe('at rank');
     expect(['below rank', 'well below rank']).toContain((await est.get(PERSONA.below)).estimate.label);
     const ex = await est.get(PERSONA.excluded);
@@ -122,6 +122,6 @@ describe('lifetime + estimated MMR against the mock', () => {
     // Competitive updates are kept on disk for scripts/mmr-backtest.mjs.
     await new Promise((r) => setTimeout(r, 50));
     const stored = JSON.parse(await fs.readFile(path.join(dir, 'mmr', `${ME}.json`), 'utf8'));
-    expect(stored.updates.length).toBe(20);
+    expect(stored.updates.length).toBe(25);
   });
 });

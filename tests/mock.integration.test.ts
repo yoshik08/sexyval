@@ -11,6 +11,16 @@ import { ITEM_TYPES, RiotApi } from '../main/riot/api';
 import { parseOwnedItems } from '../shared/collection';
 import { LoadoutService } from '../main/services/loadout';
 import { ME } from '../mock/data';
+import { SQUAD } from '../mock/data';
+import { squadWorld, type SquadMode } from '../mock/career';
+import { mockFixtures, type Stress } from '../mock/extra';
+import { HistoryService, NameService } from '../main/services/history';
+import { ProfileService } from '../main/services/profiles';
+import { MmrEstimateService } from '../main/services/mmrEstimate';
+import { SquadService } from '../main/services/squad';
+import { fiveStackPenaltyRisk } from '../shared/team';
+import type { MmrTeamView } from '../shared/features';
+import { promises as fs } from 'node:fs';
 
 process.env.SEXYVAL_QUIET = '1';
 
@@ -254,4 +264,161 @@ describe('mock: queue phase, Riot Client events, HenrikDev offers', () => {
     expect(r.text).toContain('RiotImplementationRemoved');
     await removed.close();
   });
+});
+
+// ---------- 1.4: the mock squad (MOCK_SQUAD) through the real services ----------
+
+const sqAssets = { agent: (x?: string) => (x ? { id: x, name: 'agent' } : undefined), mapName: (m?: string) => m?.split('/').pop(), rank: (t: unknown) => ({ tier: Number(t), name: `tier ${t}` }) } as any;
+const sqCatalog = { browse: { seasons: [] as any[] }, catalog: { cards: [], titles: [] } } as any;
+
+async function squadRig(opts: { squad?: SquadMode; stress?: Stress } = {}) {
+  const mock = await startMockServer({ quiet: true, lockDir: path.join(os.tmpdir(), `sexyval-test-sq-${process.pid}-${Math.random().toString(36).slice(2)}`), ...opts });
+  mock.setPhase('noval');
+  const session = new RiotSession({ lockfilePath: mock.lockfilePath, shooterLogPath: path.join(os.tmpdir(), 'sexyval-no-log'), overrideGlz: `${mock.base}/glz`, overridePd: `${mock.base}/pd`, overrideShared: `${mock.base}/shared`, loadCache: async () => ({}) });
+  const api = new RiotApi(session, () => undefined);
+  await session.ensure();
+  const named: string[] = [];
+  const names0 = api.names.bind(api);
+  api.names = (ids: string[]) => (named.push(...ids), names0(ids));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sexyval-sq-'));
+  const hidden = new Set<string>();
+  const build = () => {
+    const history = new HistoryService(api, sqAssets, path.join(dir, 'matches'), () => undefined);
+    const names = new NameService(api, () => undefined);
+    const profiles = new ProfileService(api, sqAssets, sqCatalog, history, names);
+    const isHidden = (p: string) => hidden.has(p);
+    const mmr = new MmrEstimateService(api, sqAssets, sqCatalog, history, names, profiles, path.join(dir, 'mmr'), isHidden);
+    const pushed: MmrTeamView[] = [];
+    const squad = new SquadService({ api, assets: sqAssets, catalog: sqCatalog, history, names, profiles, mmr, isHidden, livePenalty: () => undefined, onUpdate: (v) => pushed.push(v) });
+    /** First answer, then the view once every premade lookup has landed. */
+    const open = async () => {
+      const first = await squad.get(ME);
+      for (let i = 0; i < 400 && first.lookups.total && pushed.at(-1)?.lookups.done !== first.lookups.total; i++) await new Promise((r) => setTimeout(r, 20));
+      return { first, last: pushed.at(-1) ?? first };
+    };
+    return { squad, open };
+  };
+  const close = async () => {
+    await mock.close();
+    await new Promise((r) => setTimeout(r, 100));
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  };
+  return { mock, api, named, hidden, build, close };
+}
+
+describe('mock squad (MOCK_SQUAD) end to end', () => {
+  it('the squad appears and ranks as designed; shared matches agree; only pd endpoints; bounded pd calls', async () => {
+    const rig = await squadRig();
+    try {
+      const r0 = rig.mock.requests.length;
+      const { first, last } = await rig.build().open();
+      const cold = rig.mock.requests.slice(r0);
+      // First paint did not wait for premade lookups.
+      expect(first.squad.find((r) => r.puuid === SQUAD.drain)!.status).toBe('loading');
+      const byName = (n: string) => last.squad.find((r) => r.name === n)!;
+      const eligible = last.squad.filter((r) => r.eligible);
+      expect(eligible[0].name).toBe('Rahul');
+      expect(eligible[0].verdict).toBe('biggest drain');
+      expect(eligible.at(-1)!.name).toBe('Arjun');
+      expect(eligible.at(-1)!.verdict).toBe('best partner');
+      expect(byName('Dev')).toMatchObject({ games: 2, eligible: false, verdict: 'not enough games' });
+      expect(byName('Kabir').verdict).toBe('neutral');
+      expect(byName('Rahul').theirEstMmr!).toBeLessThan(byName('Rahul').theirTier!);
+      expect(byName('Rahul').rrCostEstimate!).toBeLessThan(0);
+      expect(byName('Arjun').rrCostEstimate!).toBeGreaterThan(0);
+      const t = last.team.estimate.team!;
+      expect(t.window).toBe(25);
+      expect(t.noPartyData).toBe(0);
+      expect(t.stacks.filter((s) => typeof s.stack === 'number').map((s) => s.games)).toEqual([8, 7, 4, 6]);
+      expect(Math.abs(t.stackPenalty.five! - 0.75)).toBeLessThan(0.08);
+      expect(t.lobbyAvgStacked!).toBeLessThan(t.lobbyAvgSolo! - 0.5);
+      // Shared match ids agree between your competitive updates and theirs (same result too).
+      const mine = new Map(((await rig.api.competitiveUpdates(ME, 20)).json.Matches.concat((await rig.api.competitiveUpdates(ME, 25, 'competitive', 20)).json.Matches) as any[]).map((u) => [u.MatchID, u]));
+      for (const p of [SQUAD.drain, SQUAD.carry, SQUAD.neutral]) {
+        const theirs: any[] = (await rig.api.competitiveUpdates(p, 20)).json.Matches.concat((await rig.api.competitiveUpdates(p, 25, 'competitive', 20)).json.Matches);
+        const row = last.squad.find((r) => r.puuid === p)!;
+        for (const g of row.shared) {
+          const u = theirs.find((x) => x.MatchID === g.matchId);
+          expect(u, `${p.slice(0, 8)} has ${g.matchId.slice(0, 8)}`).toBeDefined();
+          expect(Math.sign(u.RankedRatingEarned)).toBe(Math.sign(mine.get(g.matchId).RankedRatingEarned));
+          expect(g.theirRR).toBe(u.RankedRatingEarned);
+        }
+      }
+      // Only Riot's own pd endpoints; the cold open stays inside the budget (≤ 2 + 25 + 6 × (2 + 10), plus retried 429s).
+      expect(cold.every((r) => / \/pd\/(mmr|match-details|name-service)\//.test(r))).toBe(true);
+      expect(cold.length).toBeLessThanOrEqual(104);
+      // App restart: lists re-paged, every match from the disk cache.
+      const r1 = rig.mock.requests.length;
+      await rig.build().open();
+      const warm = rig.mock.requests.slice(r1);
+      expect(warm.filter((r) => r.includes('/match-details/'))).toHaveLength(0);
+      expect(warm.length).toBeLessThanOrEqual(20);
+      console.log(`squad pd calls: cold ${cold.length}, warm restart ${warm.length}`);
+      // The headline cost agrees in sign with the verdict for everyone ranked.
+      for (const r of eligible) if (r.verdict !== 'neutral') expect(Math.sign(r.rrCostEstimate!)).toBe(r.drain! > 0 ? -1 : 1);
+    } finally {
+      await rig.close();
+    }
+  }, 60_000);
+
+  it('5-stacks flagged outside the rank window really are (community table), and get RR × 0.75', () => {
+    const acts = mockFixtures.progression.acts as string[];
+    const w = squadWorld([acts[acts.length - 2], mockFixtures.progression.act], Date.UTC(2026, 10, 7), 'above', 'on');
+    let outside = 0;
+    for (const m of w.me) {
+      const info = w.info.get(m.id);
+      if (!info || info.premades.length !== 4) continue;
+      const tiers = [m.tierBefore, ...info.premades.map((p) => w.tierOf(p, m.id) ?? m.tierBefore)];
+      expect(fiveStackPenaltyRisk(tiers)).toBe(info.outside);
+      if (info.outside) outside++;
+    }
+    expect(outside).toBeGreaterThanOrEqual(3);
+  });
+
+  it('MOCK_STRESS=hidden: your hidden squad gets zero pd calls and no name lookup', async () => {
+    const rig = await squadRig({ stress: 'hidden' });
+    try {
+      rig.mock.setPhase('ingame');
+      const cp = await rig.api.coreGamePlayer(ME);
+      const cm = await rig.api.coreGameMatch(cp.json.MatchID);
+      for (const p of cm.json.Players) if (p.PlayerIdentity?.Incognito && p.Subject !== ME) rig.hidden.add(p.Subject);
+      expect(rig.hidden.has(SQUAD.drain)).toBe(true);
+      const r0 = rig.mock.requests.length;
+      const n0 = rig.named.length;
+      const { last } = await rig.build().open();
+      const calls = rig.mock.requests.slice(r0);
+      for (const p of rig.hidden) {
+        expect(calls.filter((c) => c.includes(p))).toEqual([]);
+        expect(rig.named.slice(n0)).not.toContain(p);
+      }
+      const drain = last.squad.find((r) => r.puuid === SQUAD.drain)!;
+      expect(drain).toMatchObject({ hidden: true, status: 'hidden' });
+      expect(drain.name).toBeUndefined();
+      expect(drain.theirEstMmr).toBeUndefined();
+      // Their lines in your matches still count; the visible regular (Dev) is looked up as usual.
+      expect(drain.games).toBe(11);
+      expect(last.squad.find((r) => r.puuid === SQUAD.rare)!.status).toBe('ready');
+      expect(last.team.matches.some((m) => m.premadeNames?.includes('Hidden teammate'))).toBe(true);
+    } finally {
+      await rig.close();
+    }
+  }, 60_000);
+
+  it('party: SkillDisparityRRPenalty 0.25 with MOCK_SQUAD=penalty, 0 otherwise; MOCK_SQUAD=off has no squad', async () => {
+    const pen = await squadRig({ squad: 'penalty' });
+    const off = await squadRig({ squad: 'off' });
+    try {
+      for (const r of [pen, off]) r.mock.setPhase('idle');
+      await Promise.all([pen, off].map((r) => r.api.session.ensure()));
+      const core = async (r: typeof pen) => parsePartyCore((await r.api.party((await r.api.partyPlayer()).json.CurrentPartyID)).json);
+      expect((await core(pen)).rrPenalty).toBe(0.25);
+      expect((await core(off)).rrPenalty).toBe(0);
+      off.mock.setPhase('noval');
+      const { last } = await off.build().open();
+      expect(last.squad.some((r) => Object.values(SQUAD).includes(r.puuid as any))).toBe(false);
+    } finally {
+      await pen.close();
+      await off.close();
+    }
+  }, 60_000);
 });

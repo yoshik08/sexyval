@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { MmrChip, MmrView } from '../../shared/features';
-import { estimateMmr, factsFromDetails, parseUpdate, type CompUpdate, type MatchFacts } from '../../shared/mmr';
+import { estimateMmr, factsFromDetails, parseUpdate, type CompUpdate, type MatchFacts, type MmrEstimate } from '../../shared/mmr';
+import { isLastPage, PAGE_SIZE, stitchPages } from '../../shared/lifetime';
 import { seasonRank } from '../../shared/stats';
 import type { RiotApi } from '../riot/api';
 import type { AssetService } from './assets';
@@ -11,6 +12,31 @@ import { readJson, writeJson } from '../paths';
 import { log } from '../log';
 
 const TTL = 5 * 60 * 1000;
+/** Matches per estimate: the last 25 competitive updates (two pages of at most 20). */
+export const WINDOW = 25;
+
+/** mmr/v1/players JSON and the newest WINDOW competitive updates, as fetched together. */
+export interface MmrSource {
+  mmr: any;
+  updates: CompUpdate[];
+  at: number;
+}
+
+/**
+ * Competitive updates paged like lifetime.ts: 0–20, then 20–25 only if the first page was full. Never
+ * assumes one call returns more than 20.
+ */
+export async function pageUpdates(api: RiotApi, puuid: string, limit = WINDOW): Promise<CompUpdate[]> {
+  const pages: CompUpdate[][] = [];
+  for (let start = 0; start < limit; start += PAGE_SIZE) {
+    const end = Math.min(limit, start + PAGE_SIZE);
+    const res = await api.competitiveUpdates(puuid, end, 'competitive', start);
+    const raw: any[] = Array.isArray(res.json?.Matches) ? res.json.Matches : [];
+    pages.push(raw.map(parseUpdate).filter((u): u is CompUpdate => !!u));
+    if (isLastPage(raw, end - start)) break;
+  }
+  return stitchPages(pages, (u) => u.matchId).slice(0, limit);
+}
 
 interface Stored {
   v: 1;
@@ -25,6 +51,8 @@ interface Stored {
 export class MmrEstimateService {
   private cache = new Map<string, MmrView>();
   private inflight = new Map<string, Promise<MmrView>>();
+  private sources = new Map<string, MmrSource>();
+  private sourceInflight = new Map<string, Promise<MmrSource>>();
 
   constructor(
     private readonly api: RiotApi,
@@ -38,7 +66,7 @@ export class MmrEstimateService {
     private readonly isHidden: (puuid: string) => boolean = () => false,
   ) {}
 
-  private currentAct(): { id: string; start: number } | undefined {
+  currentAct(): { id: string; start: number } | undefined {
     const now = Date.now();
     const a = this.catalog.browse.seasons.find((s: any) => s.type === 'Act' && Date.parse(s.start) <= now && now < Date.parse(s.end));
     return a ? { id: String(a.id), start: Date.parse(a.start) } : undefined;
@@ -68,7 +96,7 @@ export class MmrEstimateService {
     if (hit && !force && Date.now() - hit.fetchedAt < TTL) return hit;
     const running = this.inflight.get(puuid);
     if (running) return running;
-    const p = this.load(puuid).finally(() => this.inflight.delete(puuid));
+    const p = this.load(puuid, force).finally(() => this.inflight.delete(puuid));
     this.inflight.set(puuid, p);
     return p;
   }
@@ -78,14 +106,34 @@ export class MmrEstimateService {
     return { puuid, est: v.est, label: v.estimate.label, gapDivisions: v.estimate.gapDivisions, confidence: v.estimate.confidence, usable: v.estimate.usable };
   }
 
-  private async load(puuid: string): Promise<MmrView> {
+  /**
+   * Rank + the newest WINDOW competitive updates for a player, shared by the MMR tab's solo and team views
+   * (5 min, one fetch in flight per player). Persisted for scripts/mmr-backtest.mjs.
+   */
+  async source(puuid: string, force = false): Promise<MmrSource> {
+    if (this.isHidden(puuid)) throw new Error('Hidden player: SexyVal doesn’t look up players who hide their name.');
+    const hit = this.sources.get(puuid);
+    if (hit && !force && Date.now() - hit.at < TTL) return hit;
+    const running = this.sourceInflight.get(puuid);
+    if (running) return running;
+    const p = (async () => {
+      // Errors carry the HTTP status (HttpError message) to the screen, like every other screen.
+      const [mmr, updates] = await Promise.all([this.api.mmr(puuid), pageUpdates(this.api, puuid)]);
+      void this.persist(puuid, updates);
+      const s: MmrSource = { mmr: mmr.json, updates, at: Date.now() };
+      this.sources.set(puuid, s);
+      return s;
+    })().finally(() => this.sourceInflight.delete(puuid));
+    this.sourceInflight.set(puuid, p);
+    return p;
+  }
+
+  private async load(puuid: string, force: boolean): Promise<MmrView> {
     const namesReady = this.names.waitFor([puuid]);
-    // Errors carry the HTTP status (HttpError message) to the screen, like every other screen.
-    const [mmr, comp] = await Promise.all([this.api.mmr(puuid), this.api.competitiveUpdates(puuid, 20)]);
+    const src = await this.source(puuid, force);
     const act = this.currentAct();
-    const sr = seasonRank(mmr.json, act?.id);
-    const updates = (Array.isArray(comp.json?.Matches) ? comp.json.Matches : []).map(parseUpdate).filter((u: CompUpdate | null): u is CompUpdate => !!u);
-    void this.persist(puuid, updates);
+    const sr = seasonRank(src.mmr, act?.id);
+    const updates = src.updates;
     const facts: Record<string, MatchFacts | undefined> = {};
     await Promise.all(
       updates.map(async (u: CompUpdate) => {
@@ -95,6 +143,13 @@ export class MmrEstimateService {
     );
     const e = estimateMmr({ updates, facts, myTier: sr.tier, myRR: sr.rr, actId: act?.id, actStart: act?.start });
     await namesReady;
+    const view = this.view(puuid, e);
+    this.cache.set(puuid, view);
+    return view;
+  }
+
+  /** Estimate -> what the MMR screen shows (rank icons, map and agent names resolved). */
+  view(puuid: string, e: MmrEstimate): MmrView {
     const n = this.names.get(puuid);
     const rank = (t?: number) => (t && t >= 3 ? this.assets.rank(Math.round(t)) : undefined);
     const { matches, ...estimate } = e;
@@ -116,7 +171,6 @@ export class MmrEstimateService {
         .reverse(),
       fetchedAt: Date.now(),
     };
-    this.cache.set(puuid, view);
     return view;
   }
 }

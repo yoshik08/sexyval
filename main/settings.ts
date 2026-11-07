@@ -25,6 +25,7 @@ const DEFAULTS: Settings = {
   overlayMatchFound: true,
   henrikKey: '',
   liveDensity: 'auto',
+  mmrView: 'auto',
   autoUpdate: true,
   stretchEnabled: false,
   stretchRes: { w: 1440, h: 1080 },
@@ -42,6 +43,7 @@ const PLATFORMS = ['PC', 'xbox', 'playstation'] as const;
 const OVERLAY_POSITIONS = ['top-center', 'top-left', 'top-right'] as const;
 const OVERLAY_SCALES = ['small', 'medium'] as const;
 const DENSITIES = ['auto', 'compact', 'detailed'] as const;
+const MMR_VIEWS = ['auto', 'solo', 'team'] as const;
 const BOOST_IDS: string[] = TWEAKS.map((t) => t.id);
 
 let current: Settings = DEFAULTS;
@@ -105,6 +107,7 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   if (patch.overlayDisplay === null || (typeof patch.overlayDisplay === 'number' && Number.isSafeInteger(patch.overlayDisplay))) next.overlayDisplay = patch.overlayDisplay;
   if (typeof patch.overlayMatchFound === 'boolean') next.overlayMatchFound = patch.overlayMatchFound;
   if (DENSITIES.includes(patch.liveDensity as any)) next.liveDensity = patch.liveDensity!;
+  if (MMR_VIEWS.includes(patch.mmrView as any)) next.mmrView = patch.mmrView!;
   if (typeof patch.autoUpdate === 'boolean') next.autoUpdate = patch.autoUpdate;
   if (typeof patch.stretchEnabled === 'boolean') next.stretchEnabled = patch.stretchEnabled;
   if (typeof patch.stretchNativeOnAltTab === 'boolean') next.stretchNativeOnAltTab = patch.stretchNativeOnAltTab;

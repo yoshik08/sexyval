@@ -62,7 +62,12 @@ export function PartyScreen({ connected, valorant }: { connected: boolean; valor
                   <Btn tone="primary" onClick={() => void run('start')} disabled={!!busy || !p.isOwner}>Start queue</Btn>
                 )}
                 <Btn onClick={() => void run('ready', !me?.isReady)} disabled={!!busy}>{me?.isReady ? 'Set not ready' : 'Set ready'}</Btn>
-                <span className={cx('ml-auto font-display text-sm font-semibold uppercase tracking-label', inQueue ? 'text-warn' : 'text-muted')}>
+                {p.rrPenalty != null && p.rrPenalty > 0 && (
+                  <span data-rr-penalty className="ml-auto rounded-full bg-loss/[0.14] px-2.5 py-1 text-2xs font-semibold text-loss" title="Riot’s RR penalty for this party (SkillDisparityRRPenalty): every player earns and loses this much less RR">
+                    RR −{Math.round(p.rrPenalty * 100)}%
+                  </span>
+                )}
+                <span className={cx(p.rrPenalty ? '' : 'ml-auto', 'font-display text-sm font-semibold uppercase tracking-label', inQueue ? 'text-warn' : 'text-muted')}>
                   {inQueue ? `In queue · ${queueTag(p.queueId)}` : p.state ?? '—'}
                 </span>
               </div>

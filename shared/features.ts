@@ -1,6 +1,7 @@
 // Plain data types for the Part 2-4 screens. No tokens ever appear here.
 import type { RankInfo } from './types';
 import type { MmrEstimate, MmrMatchRow } from './mmr';
+import type { SharedGame, SquadRow } from './team';
 import type { FormStats, LifetimeAggregate, LifetimeTotals } from './lifetime';
 
 // ---------- Catalog / collection ----------
@@ -254,6 +255,8 @@ export interface PartyView {
   preferredPods: string[];
   isOwner: boolean;
   queueEntryTime?: string;
+  /** MatchmakingData.SkillDisparityRRPenalty as a 0–1 fraction of RR lost (Riot's own number for this party). */
+  rrPenalty?: number;
 }
 
 // ---------- Loadout ----------
@@ -366,6 +369,8 @@ export interface MmrMatchView extends MmrMatchRow {
   agentIcon?: string;
   rankAfter?: RankInfo;
   lobbyRank?: RankInfo;
+  /** Team view: premade names in the match ("Hidden teammate" for hidden ones). */
+  premadeNames?: string[];
 }
 
 /** Our own estimate; Riot doesn't expose MMR. */
@@ -380,6 +385,42 @@ export interface MmrView {
   mine?: RankInfo;
   lobby?: RankInfo;
   next?: RankInfo;
+  fetchedAt: number;
+}
+
+// ---------- Team-based MMR and Squad (1.4) ----------
+
+export interface SharedGameView extends SharedGame {
+  mapName?: string;
+  agentIcon?: string;
+}
+
+export interface SquadRowView extends Omit<SquadRow, 'shared'> {
+  /** Name-service first, then the match details; never for hidden players. */
+  name?: string;
+  tag?: string;
+  cardIcon?: string;
+  /** Their current rank (their own data). */
+  rank?: RankInfo;
+  /** Their estimated MMR as a rank icon. */
+  estRank?: RankInfo;
+  shared: SharedGameView[];
+}
+
+/** Your MMR tab in team view: our own estimate; Riot doesn't expose MMR. */
+export interface MmrTeamView {
+  puuid: string;
+  /** The 1.3 estimate on the same matches (Solo view). */
+  solo: MmrView;
+  /** Team-adjusted estimate: estimate.team is set (its squad is in `squad`, resolved). */
+  team: MmrView;
+  squad: SquadRowView[];
+  /** Live party RR penalty (0–1) when Valorant reports one; drives the next-match forecast. */
+  livePenalty?: number;
+  /** Premade lookups (rank + their own competitive updates): finished / queued. */
+  lookups: { done: number; total: number };
+  soloLobby?: RankInfo;
+  stackedLobby?: RankInfo;
   fetchedAt: number;
 }
 

@@ -378,7 +378,7 @@ export class GameLoop {
 
   private buildQueue(json: any): QueueView {
     const core = parsePartyCore(json);
-    return { queueId: core.queueId ?? '', queueTag: queueTag(core.queueId ?? ''), queueName: queueName(core.queueId) || 'Custom', enteredAt: core.queueEntryAt };
+    return { queueId: core.queueId ?? '', queueTag: queueTag(core.queueId ?? ''), queueName: queueName(core.queueId) || 'Custom', enteredAt: core.queueEntryAt, rrPenalty: core.rrPenalty };
   }
 
   /**
@@ -391,6 +391,11 @@ export class GameLoop {
     const pre = this.rawPregame?.json ? this.allyTeam(this.rawPregame.json, me ?? '')?.Players : undefined;
     const lists: any[][] = [Array.isArray(pre) ? pre : [], Array.isArray(this.rawCore?.Players) ? this.rawCore.Players : []];
     return lists.some((l) => l.some((p) => p?.Subject === puuid && p?.PlayerIdentity?.Incognito === true));
+  }
+
+  /** Your current party's RR penalty (SkillDisparityRRPenalty, 0–1) while Valorant runs and you're not in a match. */
+  partyPenalty(): number | undefined {
+    return this.rawParty ? parsePartyCore(this.rawParty).rrPenalty : undefined;
   }
 
   /** Rebuilds and returns the current state (tests). */

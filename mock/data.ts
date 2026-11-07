@@ -85,8 +85,29 @@ export function pick<T>(r: () => number, arr: T[]): T {
 }
 
 export function nameFor(puuid: string): { GameName: string; TagLine: string } {
+  const fixed = SQUAD_NAMES.get(puuid);
+  if (fixed) return fixed;
   const r = rng('name' + puuid);
   return { GameName: pick(r, NAMES), TagLine: String(1000 + Math.floor(r() * 8999)) };
 }
 
 export const ME = 'a1b2c3d4-5e6f-4a1b-8c2d-0000000000aa';
+
+/** The mock squad you queue with (MOCK_SQUAD, mock/career.ts). Fixed names so screenshots read the same. */
+export const SQUAD = {
+  drain: uuid('squad-drain'),
+  carry: uuid('squad-carry'),
+  neutral: uuid('squad-neutral'),
+  rare: uuid('squad-rare'),
+  five: uuid('squad-five'),
+} as const;
+/** MOCK_SQUAD=many: seven more regulars (12 premades in all). */
+export const SQUAD_EXTRA = Array.from({ length: 7 }, (_, i) => uuid(`squad-extra-${i}`));
+const SQUAD_NAMES = new Map<string, { GameName: string; TagLine: string }>([
+  [SQUAD.drain, { GameName: 'Rahul', TagLine: 'drain' }],
+  [SQUAD.carry, { GameName: 'Arjun', TagLine: 'carry' }],
+  [SQUAD.neutral, { GameName: 'Kabir', TagLine: 'mid' }],
+  [SQUAD.rare, { GameName: 'Dev', TagLine: 'rare' }],
+  [SQUAD.five, { GameName: 'Zoya', TagLine: 'five' }],
+  ...['Mira', 'Ishaan', 'Tara', 'Neel', 'Anya', 'Rohan', 'Sana'].map((n, i) => [SQUAD_EXTRA[i], { GameName: n, TagLine: 'crew' }] as [string, { GameName: string; TagLine: string }]),
+]);

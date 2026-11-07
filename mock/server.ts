@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { AGENTS, BOMB_MODE, DM_MODE, MAPS, ME, nameFor, pick, rng, uuid } from './data';
 import { createExtra, mockFixtures, SIGNIN_ACCESS, type Stress } from './extra';
 import { attachEvents, type MockEvents } from './ws';
-import { career, PERSONA, type CareerMatch, type Persona } from './career';
+import { career, PERSONA, SQUAD, squadMode, squadWorld, type CareerMatch, type Persona, type SquadMode } from './career';
 
 /** offline = Riot Client closed; noval = Riot Client open, Valorant closed; queue = party matchmaking. */
 export type MockPhase = 'idle' | 'queue' | 'pregame' | 'ingame' | 'offline' | 'noval';
@@ -24,6 +24,8 @@ export interface MockOptions {
   stress?: Stress;
   /** Your own MMR persona (MOCK_MMR): above (default), at, below, excluded. */
   mmr?: Persona;
+  /** The squad you queue with (MOCK_SQUAD): on (default), off, solo, penalty, many, five. */
+  squad?: SquadMode;
 }
 
 /** Valid key for the mock HenrikDev API; anything else is 401. */
@@ -121,13 +123,22 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
   const actPair: [string, string] = [acts[acts.length - 2] ?? acts[0], mockFixtures.progression.act];
   const careers = new Map<string, CareerMatch[]>();
   const careerById = new Map<string, CareerMatch>();
+  /** Whose career a match came from first (details work before anyone paged that player's history). */
+  const ownerOf = new Map<string, string>();
+  const squad = opts.squad ?? squadMode();
+  const world = squad === 'off' ? null : squadWorld(actPair, bootAt, mePersona, squad);
   /** Every player's matches (newest first); one source for history, competitive updates and details. */
   const careerOf = (puuid: string): CareerMatch[] => {
     let c = careers.get(puuid);
     if (!c) {
-      c = career(puuid, actPair, bootAt, mePersona);
+      // Shared squad matches are described from your side: your career registers them first.
+      if (world && puuid !== ME && world.members.has(puuid)) careerOf(ME);
+      c = career(puuid, actPair, bootAt, mePersona, squad);
       careers.set(puuid, c);
-      for (const m of c) careerById.set(m.id, m);
+      for (const m of c) {
+        if (!careerById.has(m.id)) careerById.set(m.id, m);
+        if (!ownerOf.has(m.id)) ownerOf.set(m.id, puuid);
+      }
     }
     return c;
   };
@@ -144,7 +155,8 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     const r = rng(`scenario${matchN}${bootAt}`);
     const myTeam: Color = r() < 0.5 ? 'Blue' : 'Red';
     // The MMR personas and the tracker-private player sit in every mock match, so Live can open each of them.
-    const allies = [ME, PERSONA.at, PERSONA.trackerPrivate, uuid(`ally${matchN}-3`), PERSONA.below];
+    // MOCK_STRESS=hidden with the squad on: your squad sits in the match, every one of them hidden.
+    const allies = stress === 'hidden' && world ? [ME, SQUAD.drain, SQUAD.carry, SQUAD.neutral, SQUAD.five] : [ME, PERSONA.at, PERSONA.trackerPrivate, uuid(`ally${matchN}-3`), PERSONA.below];
     const enemies = [PERSONA.excluded, ...Array.from({ length: 4 }, (_, i) => uuid(`enemy${matchN}-${i + 1}`))];
     const pool = [...AGENTS].sort(() => r() - 0.5);
     const agents = new Map<string, string>();
@@ -354,7 +366,9 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
 
   function details(matchId: string): any | null {
     if (finished.has(matchId)) return finished.get(matchId);
-    const owner = owners.get(matchId);
+    const shared = world?.info.get(matchId);
+    if (shared) history(ME);
+    const owner = shared ? ME : (owners.get(matchId) ?? ownerOf.get(matchId));
     if (!owner) return null;
     const entry = history(owner).find((h) => h.MatchID === matchId)!;
     const c = careerById.get(matchId);
@@ -368,11 +382,30 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       ...Array.from({ length: 5 }, (_, i) => ({ p: uuid(matchId + 'e' + i), t: other(mine) })),
     ];
     if (!c) return buildBombDetails(matchId, r, players, map, entry.QueueID, 'Red', entry.GameStartTime);
+    if (shared && world) {
+      // Your premades take the first teammate slots, at their own rank and ACS; the matchmaker fills the
+      // rest of both teams around the party's MMR, so the lobby reflects the party, not you.
+      shared.premades.forEach((p, i) => (players[1 + i] = { p, t: mine }));
+      const tierOf = (p: string) => (p === ME ? c.tierBefore : (world.tierOf(p, matchId) ?? c.tierBefore));
+      const party = [ME, ...shared.premades];
+      const partyMmr = party.reduce((a, p) => a + world.mmrOf(p, tierOf(p)), 0) / party.length;
+      const tiers = new Map<string, number>();
+      const parties = new Map<string, string>();
+      const acs = new Map<string, number>([[ME, c.acs], ...(world.acs.get(matchId) ?? new Map<string, number>())]);
+      players.forEach(({ p }, i) => {
+        const inParty = party.includes(p);
+        tiers.set(p, stress === 'radiant' ? 27 : inParty ? tierOf(p) : Math.max(3, Math.min(27, Math.round(partyMmr + ((i * 7) % 3) - 1))));
+        parties.set(p, inParty ? uuid(`party-${matchId}`) : uuid(`solo-${matchId}-${i}`));
+      });
+      const winner: Color | null = c.draw ? null : c.win ? mine : other(mine);
+      const rounds = { [mine]: c.myRounds, [other(mine)]: c.theirRounds } as Record<Color, number>;
+      return buildBombDetails(matchId, r, players, map, entry.QueueID, 'Red', entry.GameStartTime, undefined, { winner, rounds, tiers, parties, acs });
+    }
     // Lobby ranks spread around the career's lobby tier; the owner's party fills its first teammates.
     const tiers = new Map<string, number>();
     const parties = new Map<string, string>();
     players.forEach(({ p }, i) => {
-      tiers.set(p, p === owner ? c.tierBefore : Math.max(3, Math.min(27, c.lobbyTier + ((i * 7) % 3) - 1)));
+      tiers.set(p, stress === 'radiant' ? 27 : p === owner ? c.tierBefore : Math.max(3, Math.min(27, c.lobbyTier + ((i * 7) % 3) - 1)));
       parties.set(p, i < c.partySize ? uuid(`party-${matchId}`) : uuid(`solo-${matchId}-${i}`));
     });
     const winner: Color | null = c.draw ? null : c.win ? mine : other(mine);
@@ -616,6 +649,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     ENTITLEMENT,
     career: careerOf,
     bootAt,
+    squad,
   });
 
   const server = http.createServer(async (req, res) => {

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { pickHistoryIds, summarizeMatch, summarizePlayer, trimDetails, type RawMatchSummary, type TrimmedDetails } from '../../shared/last5';
+import { lacksPartyData, pickHistoryIds, summarizeMatch, summarizePlayer, trimDetails, type RawMatchSummary, type TrimmedDetails } from '../../shared/last5';
 import type { Last5State, MatchSummary, SvScore } from '../../shared/types';
 import { svScore } from '../../shared/score';
 import type { RiotApi } from '../riot/api';
@@ -22,6 +22,8 @@ export class HistoryService {
   private entries = new Map<string, Entry>();
   private details = new Map<string, TrimmedDetails>();
   private detailInflight = new Map<string, Promise<TrimmedDetails | null>>();
+  /** Matches re-fetched this session because their cached copy predates partyId (at most once each). */
+  private partyRefetched = new Set<string>();
   private loadInflight = new Map<string, Promise<void>>();
 
   constructor(
@@ -121,20 +123,41 @@ export class HistoryService {
     return path.join(this.dir, `${id.replace(/[^a-zA-Z0-9-]/g, '')}.v2.json`);
   }
 
-  /** Memory -> disk -> network. Returns null on 404 (e.g. match not finished). */
-  async getDetails(id: string): Promise<TrimmedDetails | null> {
+  /**
+   * Memory -> disk -> network. Returns null on 404 (e.g. match not finished).
+   * cachedOnly: never touches the network (null when not cached).
+   * needParty: a cached copy from before partyId was kept is fetched again, once per session.
+   */
+  async getDetails(id: string, opts: { cachedOnly?: boolean; needParty?: boolean } = {}): Promise<TrimmedDetails | null> {
+    const stale = (d: TrimmedDetails) => !!opts.needParty && lacksPartyData(d) && !this.partyRefetched.has(id);
     const mem = this.details.get(id);
-    if (mem) return mem;
+    if (mem && !stale(mem)) return mem;
     const inflight = this.detailInflight.get(id);
     if (inflight) return inflight;
-    const p = (async () => {
+    if (opts.cachedOnly && !mem) {
       const disk = await readJson<TrimmedDetails | null>(this.file(id), null);
-      if (disk && disk.matchId) {
+      if (disk && disk.matchId) this.details.set(id, disk);
+      return disk && disk.matchId ? disk : null;
+    }
+    if (opts.cachedOnly) return mem ?? null;
+    const p = (async () => {
+      const disk = mem ?? (await readJson<TrimmedDetails | null>(this.file(id), null));
+      if (disk && disk.matchId && !stale(disk)) {
         this.details.set(id, disk);
         return disk;
       }
-      const res = await this.api.matchDetails(id);
-      if (res.status === 404 || !res.json) return null;
+      const old = disk && disk.matchId ? disk : null;
+      if (old) this.partyRefetched.add(id);
+      // A failed re-fetch keeps the old copy (no party data, still a match).
+      const keepOld = () => (old ? (this.details.set(id, old), old) : null);
+      let res;
+      try {
+        res = await this.api.matchDetails(id);
+      } catch (e) {
+        if (old) return keepOld();
+        throw e;
+      }
+      if (res.status === 404 || !res.json) return keepOld();
       const t = trimDetails(res.json, id);
       this.details.set(id, t);
       await writeJson(this.file(id), t).catch((e) => log.warn('persist details failed', e));

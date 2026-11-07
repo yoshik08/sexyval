@@ -35,6 +35,8 @@ export interface TrimmedDetails {
   }[];
   teams: { teamId: string; won: boolean; roundsWon: number }[];
   roundResults: { roundNum: number; winningTeam?: string; bombPlanter?: string }[];
+  /** 1.4+: whether Riot's details carried partyId. Undefined = cached by an older version that didn't keep it. */
+  partyData?: boolean;
 }
 
 function num(v: unknown): number {
@@ -140,7 +142,13 @@ export function trimDetails(raw: any, fallbackId?: string): TrimmedDetails {
       winningTeam: r?.winningTeam ?? undefined,
       bombPlanter: r?.bombPlanter ?? undefined,
     })),
+    partyData: players.some((p) => typeof p?.partyId === 'string' && p.partyId),
   };
+}
+
+/** Cached by a version that trimmed partyId away (before 1.3): a team match with no party data and no flag. */
+export function lacksPartyData(d: TrimmedDetails): boolean {
+  return d.partyData === undefined && d.teams.length === 2 && d.players.length > 2 && !d.players.some((p) => p.partyId);
 }
 
 /** Match row before asset resolution. */
