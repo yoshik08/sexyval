@@ -554,6 +554,7 @@ async function startServices(): Promise<void> {
     'ui:report': (v: unknown) => resume?.report(uiReport(v)),
     'update:status': () => updater?.status,
     'update:check': () => updater?.checkNow(),
+    'update:install': () => updater?.installNow(),
     'update:openReleases': () => shell.openExternal(RELEASES_URL),
   });
 

@@ -122,9 +122,16 @@ function Updates({ s, set }: { s: Settings; set: (patch: Partial<Settings>) => v
           </>
         }
       >
-        <Btn size="sm" tone="ghost" disabled={status.state === 'checking' || status.state === 'downloading'} onClick={() => void api.rpc('update:check')}>
-          Check now
-        </Btn>
+        <div className="flex items-center gap-2">
+          {status.state === 'downloaded' && (
+            <Btn size="sm" onClick={() => void api.rpc('update:install')}>
+              Update now
+            </Btn>
+          )}
+          <Btn size="sm" tone="ghost" disabled={status.state === 'checking' || status.state === 'downloading'} onClick={() => void api.rpc('update:check')}>
+            Check now
+          </Btn>
+        </div>
       </Row>
     </Group>
   );

@@ -84,6 +84,18 @@ export class AppUpdater {
     autoUpdater.checkForUpdates().catch((e) => log.warn('update check failed', e));
   }
 
+  /** "Update now": installs a downloaded update right away instead of waiting for a quiet moment. */
+  async installNow(): Promise<void> {
+    if (this.installing || this.status.state !== 'downloaded') return;
+    this.installing = true;
+    if (this.safeTimer) clearInterval(this.safeTimer);
+    this.safeTimer = null;
+    const settings = this.deps.getSettings();
+    await this.deps.resume.save(settings.window, this.windowHidden, app.getVersion()).catch((e) => log.warn('resume save failed', e));
+    log.info(`installing update ${this.status.availableVersion ?? ''} now (user asked)`);
+    autoUpdater.quitAndInstall(true, true);
+  }
+
   private trackWindow(): void {
     const win = this.deps.getWindow();
     if (!win) return;
