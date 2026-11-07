@@ -1,7 +1,8 @@
 import type { AppState, CoreGameView, MmrState, Phase, PlayerRow, PregameView, QueueView } from '../shared/types';
 import { modeName, queueName, queueTag } from '../shared/queues';
 import { nextDelay, phaseFrom, phaseLabel, WAIT_MS } from '../shared/phase';
-import { parsePartyCore } from '../shared/party';
+import { groupParties, parsePartyCore, partyOfPresence } from '../shared/party';
+import { decodePresence } from './services/hub';
 import { getStartSide, isStartSideVerified } from '../shared/side';
 import { HttpError } from './riot/http';
 import { RiotSession, WaitingError } from './riot/session';
@@ -33,6 +34,7 @@ export interface LoopDeps {
 
 /** Coalesces bursts of WebSocket events into one tick. */
 const NUDGE_MS = 120;
+const PRESENCE_MS = 5000;
 
 interface PlayerInput {
   puuid: string;
@@ -63,6 +65,9 @@ export class GameLoop {
   /** CurrentPartyID, re-fetched only when the party call answers 404. */
   private partyId: string | null = null;
   private lastMapId = '';
+  /** puuid -> partyId from local chat presences, refreshed at most every PRESENCE_MS in a match. */
+  private presenceParty = new Map<string, string>();
+  private presenceAt = 0;
   private emitNow = false;
   private again = false;
   private nudgeTimer: NodeJS.Timeout | null = null;
@@ -270,8 +275,35 @@ export class GameLoop {
       this.lastMapId = '';
     }
     if (coreMatch) this.afterCore(me, coreMatch);
+    if (pregameMatch || coreMatch) await this.pollPresences();
+    else this.presenceParty.clear();
     if (phase === 'idle' || phase === 'queue') this.d.history.ensure(me);
     return phase;
+  }
+
+  /** Party ids from the Riot Client chat presences (friends and you). Failures keep the last map. */
+  private async pollPresences(): Promise<void> {
+    if (Date.now() - this.presenceAt < PRESENCE_MS) return;
+    this.presenceAt = Date.now();
+    try {
+      const r = await this.d.api.local('GET', '/chat/v4/presences', undefined, 'presences');
+      const list: any[] = Array.isArray(r.json?.presences) ? r.json.presences : [];
+      const next = new Map<string, string>();
+      for (const p of list) {
+        if (p?.product !== 'valorant' || typeof p?.puuid !== 'string') continue;
+        const id = partyOfPresence(decodePresence(p.private));
+        if (id) next.set(p.puuid, id);
+      }
+      this.presenceParty = next;
+    } catch (e) {
+      log.debug('presences failed', (e as Error).message);
+    }
+  }
+
+  /** Brackets only: hidden players get one too, but nothing is looked up for them. */
+  private withParties(rows: PlayerRow[]): PlayerRow[] {
+    const g = groupParties(rows, (p) => this.presenceParty.get(p));
+    return rows.map((r) => (g.has(r.puuid) ? { ...r, partyGroup: g.get(r.puuid) } : r));
   }
 
   /** Party JSON, or null when there is none. CurrentPartyID is cached and re-fetched only after a 404. */
@@ -420,7 +452,7 @@ export class GameLoop {
       queueTag: queueTag(json?.QueueID),
       phaseEndsAt: ns != null ? at + ns / 1e6 : undefined,
       allyTeamId: teamId,
-      allies: players.map((p) =>
+      allies: this.withParties(players.map((p) =>
         this.row(me, {
           puuid: str(p?.Subject),
           teamId,
@@ -430,7 +462,7 @@ export class GameLoop {
           incognito: p?.PlayerIdentity?.Incognito === true,
           level: finite(p?.PlayerIdentity?.AccountLevel),
         }),
-      ),
+      )),
       enemySize: finite(json?.EnemyTeamSize) ?? enemyPlayers ?? 5,
       enemyLocked: finite(json?.EnemyTeamLockCount) ?? 0,
       side: { side: getStartSide(teamId, str(json?.QueueID), mode), verified: isStartSideVerified(str(json?.QueueID)) },
@@ -440,7 +472,7 @@ export class GameLoop {
   private buildCore(me: string, json: any): CoreGameView {
     const players: any[] = Array.isArray(json?.Players) ? json.Players : [];
     const myTeamId = str(players.find((p) => p?.Subject === me)?.TeamID);
-    const rows = players.map((p) =>
+    const rows = this.withParties(players.map((p) =>
       this.row(me, {
         puuid: str(p?.Subject),
         teamId: str(p?.TeamID),
@@ -449,7 +481,7 @@ export class GameLoop {
         incognito: p?.PlayerIdentity?.Incognito === true,
         level: finite(p?.PlayerIdentity?.AccountLevel),
       }),
-    );
+    ));
     const mode = str(json?.ModeID);
     return {
       matchId: str(json?.MatchID),

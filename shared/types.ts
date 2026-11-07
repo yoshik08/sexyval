@@ -136,6 +136,8 @@ export interface PlayerRow {
   svScore?: SvScore | null;
   /** Current + peak rank from mmr/v1. Undefined for hidden players (never fetched). */
   mmr?: MmrState;
+  /** Live party of 2+ on this player's team, from chat presences (index 0 = party A). */
+  partyGroup?: { id: string; size: number; index: number };
 }
 
 /** Starting side from the hardcoded rule (shared/side.ts). `side` is null when the mode has none. */

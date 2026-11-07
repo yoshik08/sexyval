@@ -439,3 +439,25 @@ export function PlayerDetail({ p, narrow, open }: { p: PlayerRow; narrow?: boole
     </div>
   );
 }
+
+const PARTY_COLORS = ['#f5c451', '#5ab0ff', '#c38cff', '#5fd39a', '#ff8a5c'];
+export const partyColor = (i: number) => PARTY_COLORS[i % PARTY_COLORS.length];
+export const partyLetter = (i: number) => String.fromCharCode(65 + (i % 26));
+
+/** 3px left bar for a row in a live party; render inside a `relative` row. */
+export function PartyBar({ p }: { p: PlayerRow }) {
+  if (!p.partyGroup) return null;
+  return <span aria-hidden className="pointer-events-none absolute inset-y-1.5 left-0 w-[3px] rounded-full" style={{ background: partyColor(p.partyGroup.index) }} />;
+}
+
+/** "Party A · 2" (enemy rows: "Enemy party A · 2"). */
+export function PartyChip({ p, enemy }: { p: PlayerRow; enemy?: boolean }) {
+  const g = p.partyGroup;
+  if (!g) return null;
+  const c = partyColor(g.index);
+  return (
+    <span data-party-chip className="num shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold" style={{ color: c, background: `${c}1f` }}>
+      {enemy ? 'Enemy party' : 'Party'} {partyLetter(g.index)} · {g.size}
+    </span>
+  );
+}

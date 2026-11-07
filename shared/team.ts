@@ -77,6 +77,7 @@ export interface TeamMate {
   tier: number;
   /** Same partyId as the viewer. */
   premade: boolean;
+  partyId?: string;
   acs: number;
   kills: number;
   deaths: number;
@@ -146,6 +147,7 @@ export function teamFactsFromDetails(d: DetailsLike, puuid: string): TeamFacts |
     puuid: p.subject,
     tier: p.tier ?? 0,
     premade: stack !== 'unknown' && p.subject !== puuid && p.partyId === me.partyId,
+    partyId: p.partyId,
     acs: acsOf(p),
     kills: p.kills,
     deaths: p.deaths,

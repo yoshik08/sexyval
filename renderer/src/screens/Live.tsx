@@ -6,7 +6,7 @@ import { lockIn, staggerIn } from '../lib/motion';
 import { saveSettings, useSettings } from '../lib/store';
 import { Btn } from '../components/kit';
 import { Img, Last5Pips, Panel, SectionTitle, Segmented, SideBadge, Skeleton, tint } from '../components/ui';
-import { ExpandPanel, isHidden, PlayerDetail, RankPair, rowHandlers, ScoreBadge, useDensity, useExpansion } from '../components/players';
+import { ExpandPanel, isHidden, PartyBar, PartyChip, PlayerDetail, RankPair, rowHandlers, ScoreBadge, useDensity, useExpansion } from '../components/players';
 
 export function LiveScreen({ state, onLoadout }: { state: AppState | null; onLoadout: () => void }) {
   if (!state) return <Waiting message="Starting…" />;
@@ -203,6 +203,7 @@ function AllyCard({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<t
         <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-surface to-transparent" />
         <span className={cx('absolute left-3.5 top-3.5 rounded-full px-2.5 py-1 text-xs font-semibold', locked ? 'bg-white text-black' : picking ? 'bg-white/15 text-ink' : 'bg-black/40 text-faint')}>{locked ? 'Locked' : picking ? 'Picking' : 'Waiting'}</span>
         {p.isMe && <span className="absolute right-3.5 top-3.5 rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold text-ink">You</span>}
+        <PartyBar p={p} />
       </div>
       <div className="flex flex-1 flex-col gap-2.5 px-4 pb-4">
         <div className="min-w-0">
@@ -211,6 +212,7 @@ function AllyCard({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<t
             {hidden ? <span className="italic text-faint">Hidden</span> : p.name ? <>{p.name}<span className="text-faint">#{p.tag}</span></> : <Skeleton className="mt-1 h-3.5 w-24" />}
           </div>
           {hidden && p.accountLevel != null && <div className="text-xs text-faint">Level {p.accountLevel}</div>}
+          {p.partyGroup && <div className="mt-1.5"><PartyChip p={p} /></div>}
         </div>
         <div className="mt-auto flex flex-col gap-2.5 border-t border-white/[0.07] pt-3">
           <div className="flex items-center justify-between gap-2">
@@ -308,14 +310,15 @@ function Chip({ children, strong }: { children: React.ReactNode; strong?: boolea
 const COLS = 'ig-cols';
 
 /** Compact line: agent, name#tag, current + peak rank, SV Score, last-5 pips. Everything else is in tooltips or the expanded panel. */
-function PlayerLine({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<typeof useExpansion> }) {
+function PlayerLine({ p, open, x, enemy }: { p: PlayerRow; open: boolean; x: ReturnType<typeof useExpansion>; enemy?: boolean }) {
   const hidden = isHidden(p);
   return (
     <div
       data-row
       {...rowHandlers(p.puuid, open, x, !hidden)}
-      className={cx('mx-2 rounded-2xl px-2.5 py-2 outline-none transition-colors duration-160', p.isMe && 'bg-white/[0.05]', !hidden && 'cursor-pointer hover:bg-white/[0.03] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/50', open && !p.isMe && 'bg-white/[0.03]')}
+      className={cx('relative mx-2 rounded-2xl px-2.5 py-2 outline-none transition-colors duration-160', p.isMe && 'bg-white/[0.05]', !hidden && 'cursor-pointer hover:bg-white/[0.03] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/50', open && !p.isMe && 'bg-white/[0.03]')}
     >
+      <PartyBar p={p} />
       <div className={COLS}>
         <div className="flex min-w-0 items-center gap-3">
           <Img src={p.agent?.icon} alt={p.agent?.name ?? ''} className="h-9 w-9 shrink-0 rounded-xl bg-white/5" fallback={<div className="h-9 w-9 shrink-0 rounded-xl bg-white/5" />} />
@@ -334,6 +337,7 @@ function PlayerLine({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType
                 )}
               </span>
               {p.isMe && <span className="shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-2xs font-semibold text-ink">You</span>}
+              <PartyChip p={p} enemy={enemy} />
             </div>
             <div className="truncate text-xs text-muted">
               {p.agent?.name ?? '—'}
@@ -368,7 +372,7 @@ function TeamColumn({ title, rows, tone, density }: { title: string; rows: Playe
         <span className="text-right">SV</span>
         <span>Last 5</span>
       </div>
-      <div className="pb-2">{rows.length ? rows.map((p) => <PlayerLine key={p.puuid} p={p} open={!isHidden(p) && x.isOpen(p.puuid)} x={x} />) : <div className="px-5 py-6 text-sm text-muted">No players reported.</div>}</div>
+      <div className="pb-2">{rows.length ? rows.map((p) => <PlayerLine key={p.puuid} p={p} open={!isHidden(p) && x.isOpen(p.puuid)} x={x} enemy={tone === 'enemy'} />) : <div className="px-5 py-6 text-sm text-muted">No players reported.</div>}</div>
     </Panel>
   );
 }

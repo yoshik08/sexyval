@@ -1,5 +1,6 @@
 import type { MmrTeamView, SquadRowView } from '../../shared/features';
 import { estimateMmr, factsFromDetails, gapLabel, type MatchFacts, type MmrInput } from '../../shared/mmr';
+import { enemyStacks } from '../../shared/party';
 import { teamFactsFromDetails, type PremadeInfo, type TeamFacts } from '../../shared/team';
 import { seasonRank } from '../../shared/stats';
 import type { RiotApi } from '../riot/api';
@@ -70,12 +71,11 @@ export class SquadService {
   async get(query: string, force = false): Promise<MmrTeamView> {
     const puuid = await this.d.profiles.resolve(query);
     if (this.d.isHidden(puuid)) throw new Error(HIDDEN_ERR);
-    if (puuid !== this.d.api.session.puuid) throw new Error('The team view covers your own matches only.');
     const hit = this.cache.get(puuid);
     if (hit && !force && Date.now() - hit.fetchedAt < TTL) {
       // Same matches; only the live party may have changed (forecast).
       const base = this.bases.get(puuid);
-      return base && hit.livePenalty !== this.d.livePenalty() ? this.rebuild(base) : hit;
+      return base && hit.livePenalty !== this.live(puuid) ? this.rebuild(base) : hit;
     }
     const running = this.inflight.get(puuid);
     if (running) return running;
@@ -200,12 +200,17 @@ export class SquadService {
     return fallback?.gameName ? `${fallback.gameName}${fallback.tagLine ? `#${fallback.tagLine}` : ''}` : 'Teammate';
   }
 
+  /** The live party penalty is yours: other players get no forecast from it. */
+  private live(puuid: string): number | undefined {
+    return puuid === this.d.api.session.puuid ? this.d.livePenalty() : undefined;
+  }
+
   private rebuild(base: Base): MmrTeamView {
     const infos: Record<string, PremadeInfo> = {};
     for (const p of base.seen.keys()) infos[p] = this.infoFor(p, base);
     const premadeMmr: Record<string, number> = {};
     for (const [p, i] of Object.entries(infos)) if (i.status === 'ready' && i.estMmr != null) premadeMmr[p] = i.estMmr;
-    const live = this.d.livePenalty();
+    const live = this.live(base.puuid);
     const { team: _team, puuid: _p, ...plain } = base.input;
     const soloE = estimateMmr(plain);
     const teamE = estimateMmr({ ...base.input, premadeMmr, premades: infos, livePartyPenalty: live });
@@ -234,7 +239,7 @@ export class SquadService {
       }
       return undefined;
     };
-    teamView.matches = teamView.matches.map((m) => ({ ...m, premadeNames: m.premades?.map((p) => this.nameOf(p, base, fallbackLine(p))) }));
+    teamView.matches = teamView.matches.map((m) => ({ ...m, premadeNames: m.premades?.map((p) => this.nameOf(p, base, fallbackLine(p))), enemyStacks: enemyStacks(base.input.team?.[m.matchId]?.enemies ?? []) }));
     const view: MmrTeamView = {
       puuid: base.puuid,
       solo,

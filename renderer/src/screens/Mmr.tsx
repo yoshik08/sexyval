@@ -106,7 +106,7 @@ function Signals({ v }: { v: MmrView }) {
             <div className="mt-1 text-xs text-muted">last 20</div>
           </div>
         </div>
-        <p className="mt-3 text-xs text-faint">About 50% means you’re where you belong.</p>
+        <p className="mt-3 text-xs text-faint">About 50% means {v.isMe ? 'you’re where you belong' : 'they’re where they belong'}.</p>
       </Panel>
     </div>
   );
@@ -230,7 +230,7 @@ function MatchTable({ v }: { v: MmrView }) {
 
 /** Team view's table: the stack (premade names on hover) and both teams' average rank replace the lobby column. */
 function TeamMatchTable({ v }: { v: MmrView }) {
-  const cols = 'grid-cols-[64px_minmax(0,1fr)_minmax(0,0.75fr)_84px_52px_52px_150px_minmax(0,1.2fr)]';
+  const cols = 'grid-cols-[64px_minmax(0,1fr)_minmax(0,0.75fr)_84px_52px_52px_84px_150px_minmax(0,1.2fr)]';
   return (
     <Panel>
       <div className={cx('grid gap-3 border-b border-line px-5 py-2.5 text-xs text-faint', cols)}>
@@ -240,6 +240,7 @@ function TeamMatchTable({ v }: { v: MmrView }) {
         <span>Result</span>
         <span className="text-right">RR</span>
         <span>Stack</span>
+        <span title="Enemy party sizes from match details">Enemy stacks</span>
         <span>Team vs enemy</span>
         <span>Why</span>
       </div>
@@ -259,7 +260,8 @@ function TeamMatchTable({ v }: { v: MmrView }) {
             <StackIcon stack={m.stack} className={m.stack === 'unknown' ? 'text-faint' : 'text-muted'} />
             <span className="num">{typeof m.stack === 'number' ? m.stack : '?'}</span>
           </span>
-          <span className="num truncate text-xs text-muted" title={m.teamAvgTier != null && m.enemyAvgTier != null ? `Your team ${tierName(m.teamAvgTier)} · enemy ${tierName(m.enemyAvgTier)}` : undefined}>
+          <span data-enemy-stacks className="num truncate text-xs text-muted">{m.enemyStacks ?? '–'}</span>
+          <span className="num truncate text-xs text-muted" title={m.teamAvgTier != null && m.enemyAvgTier != null ? `${v.isMe ? 'Your' : 'Their'} team ${tierName(m.teamAvgTier)} · enemy ${tierName(m.enemyAvgTier)}` : undefined}>
             {m.teamAvgTier != null ? tierName(m.teamAvgTier, true) : '–'} <span className="text-faint">vs</span> {m.enemyAvgTier != null ? tierName(m.enemyAvgTier, true) : '–'}
           </span>
           <span className="truncate text-xs text-muted" title={m.tag}>
@@ -330,28 +332,29 @@ function SoloBody({ view, loading }: { view: MmrView; loading: boolean }) {
         </>
       )}
       {view.matches.length > 0 && <MatchTable v={view} />}
-      <p className="text-xs text-faint">Estimate from your RR changes and lobby ranks. Riot doesn’t show real MMR.</p>
+      <p className="text-xs text-faint">Estimate from {view.isMe ? 'your' : 'their'} RR changes and lobby ranks. Riot doesn’t show real MMR.</p>
     </div>
   );
 }
 
 const stackedGames = (t?: TeamSummary) => (t ? t.stacks.filter((s) => typeof s.stack === 'number' && s.stack >= 2).reduce((a, s) => a + s.games, 0) : 0);
-const TEAM_FOOTER = 'Estimate from your RR, lobby ranks and who you queued with. Riot doesn’t show real MMR. Teammate impact over 25 matches is a rough signal, not a verdict.';
+const teamFooter = (me: boolean) => `Estimate from ${me ? 'your' : 'their'} RR, lobby ranks and who ${me ? 'you' : 'they'} queued with. Riot doesn’t show real MMR. Teammate impact over 25 matches is a rough signal, not a verdict.`;
 
 function TeamBody({ tv, loading }: { tv: MmrTeamView; loading: boolean }) {
   const view = tv.team;
   const e = view.estimate;
   const t = e.team!;
+  const me = view.isMe;
   const fade = cx('flex flex-col gap-6 transition-opacity duration-180', loading && 'opacity-60');
   if (!stackedGames(t)) {
     return (
       <div data-mmr data-mmr-team className={fade}>
         <StackTiles team={t} livePenalty={tv.livePenalty} />
         <Panel className="p-6">
-          <div className="t-head text-lg text-ink">You’ve only played solo this act</div>
-          <p className="text-pretty mt-1 max-w-2xl text-sm text-muted">With no premades there is nothing to adjust for: your lobbies already reflect you, and the Solo view has your estimate. Queue with friends and this view shows how they move your lobbies and your RR.</p>
+          <div className="t-head text-lg text-ink">{me ? 'You’ve' : 'They’ve'} only played solo this act</div>
+          <p className="text-pretty mt-1 max-w-2xl text-sm text-muted">{me ? 'With no premades there is nothing to adjust for: your lobbies already reflect you, and the Solo view has your estimate. Queue with friends and this view shows how they move your lobbies and your RR.' : 'With no premades there is nothing to adjust for: their lobbies already reflect them, and the Solo view has their estimate.'}</p>
         </Panel>
-        <p className="text-xs text-faint">{TEAM_FOOTER}</p>
+        <p className="text-xs text-faint">{teamFooter(view.isMe)}</p>
       </div>
     );
   }
@@ -365,12 +368,12 @@ function TeamBody({ tv, loading }: { tv: MmrTeamView; loading: boolean }) {
           <div className="t-head text-lg text-ink">Not enough matches yet</div>
           <p className="text-pretty mt-1 max-w-2xl text-sm text-muted">
             {fives >= 3
-              ? `${fives} of your recent matches were 5-stacks. Their RR penalty can only be measured against solo, duo and trio games, so play a few outside a 5-stack to get a team estimate.`
+              ? `${fives} of ${me ? 'your' : 'their'} recent matches were 5-stacks. Their RR penalty can only be measured against solo, duo and trio games, so play a few outside a 5-stack to get a team estimate.`
               : 'Play a few more competitive matches this act to get a team estimate.'}
           </p>
         </Panel>
         <SquadList rows={tv.squad} randoms={t.randoms} settled={tv.lookups.done >= tv.lookups.total} youTier={e.myTier} />
-        <p className="text-xs text-faint">{TEAM_FOOTER}</p>
+        <p className="text-xs text-faint">{teamFooter(view.isMe)}</p>
       </div>
     );
   }
@@ -379,9 +382,9 @@ function TeamBody({ tv, loading }: { tv: MmrTeamView; loading: boolean }) {
   const lobbyGap = solo != null && stacked != null && Math.abs(solo - stacked) >= 0.5;
   return (
     <div data-mmr data-mmr-team className={fade}>
-      <Headline v={view} badge="Team-adjusted: lobbies corrected for who you queued with">
+      <Headline v={view} badge={`Team-adjusted: lobbies corrected for who ${me ? 'you' : 'they'} queued with`}>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
-          <span className="num" title="How much each signal counts in the estimate: the RR split against your rank, and the team-adjusted lobby signal (inverse-variance weights, scaled in by how many games were stacked).">
+          <span className="num" title={`How much each signal counts in the estimate: the RR split against ${me ? 'your' : 'their'} rank, and the team-adjusted lobby signal (inverse-variance weights, scaled in by how many games were stacked).`}>
             Split {Math.round(t.wSplitUsed * 100)}% · Team lobbies {Math.round(t.wTeamUsed * 100)}%
           </span>
           {t.teamSignal != null && (
@@ -395,7 +398,7 @@ function TeamBody({ tv, loading }: { tv: MmrTeamView; loading: boolean }) {
           <p data-lobby-gap className="text-pretty mt-3 flex items-center gap-2 text-sm text-ink">
             {tv.stackedLobby && <Img src={tv.stackedLobby.icon} alt="" className="h-6 w-6 shrink-0" />}
             <span>
-              Your stacked lobbies average {tierName(stacked!)}, your solo lobbies {tierName(solo!)}. Your party pulls your lobbies {stacked! < solo! ? 'down' : 'up'}.
+              {me ? 'Your' : 'Their'} stacked lobbies average {tierName(stacked!)}, {me ? 'your' : 'their'} solo lobbies {tierName(solo!)}. {me ? 'Your' : 'Their'} party pulls {me ? 'your' : 'their'} lobbies {stacked! < solo! ? 'down' : 'up'}.
             </span>
           </p>
         )}
@@ -403,22 +406,21 @@ function TeamBody({ tv, loading }: { tv: MmrTeamView; loading: boolean }) {
       <StackTiles team={t} livePenalty={tv.livePenalty} />
       <SquadList rows={tv.squad} randoms={t.randoms} settled={tv.lookups.done >= tv.lookups.total} youTier={e.myTier} />
       <Panel className="p-5">
-        <div className="mb-1 text-xs text-faint">This act, one point per competitive match; dots show who you queued with</div>
+        <div className="mb-1 text-xs text-faint">This act, one point per competitive match; dots show who {me ? 'you' : 'they'} queued with</div>
         <Graph v={view} team />
       </Panel>
       <Forecast v={view} />
       {view.matches.length > 0 && <TeamMatchTable v={view} />}
-      <p className="text-xs text-faint">{TEAM_FOOTER}</p>
+      <p className="text-xs text-faint">{teamFooter(view.isMe)}</p>
     </div>
   );
 }
 
-type Shown = { kind: 'me'; tv: MmrTeamView } | { kind: 'other'; view: MmrView };
 
 export function MmrScreen({ connected, myPuuid, initialQuery, players }: { connected: boolean; myPuuid?: string; initialQuery?: string; players: PlayerRow[] }) {
   const settings = useSettings();
   const [query, setQuery] = useState('');
-  const [shown, setShown] = useState<Shown | null>(null);
+  const [shown, setShown] = useState<MmrTeamView | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const target = useRef<string | null>(null);
@@ -428,21 +430,12 @@ export function MmrScreen({ connected, myPuuid, initialQuery, players }: { conne
     target.current = q;
     setLoading(true);
     setErr(null);
-    // Your own account: one call carries both views (solo and team-adjusted) on the same matches.
-    if (q === myPuuid) {
-      const r = await act<MmrTeamView>('mmr:team', q, force);
-      if (target.current !== q) return;
-      setLoading(false);
-      if (r.ok) setShown({ kind: 'me', tv: r.data });
-      else setErr(r.error); // errors keep the last good result on screen
-      return;
-    }
-    const r = await act<MmrView>('mmr:get', q, force);
+    // One call carries both views (solo and team-adjusted) on the same matches, for anyone.
+    const r = await act<MmrTeamView>('mmr:team', q, force);
     if (target.current !== q) return;
     setLoading(false);
-    // Errors keep the last good result on screen.
-    if (r.ok) setShown({ kind: 'other', view: r.data });
-    else setErr(r.error);
+    if (r.ok) setShown(r.data);
+    else setErr(r.error); // errors keep the last good result on screen
   };
   useEffect(() => {
     if (initialQuery) void load(initialQuery);
@@ -450,14 +443,14 @@ export function MmrScreen({ connected, myPuuid, initialQuery, players }: { conne
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, myPuuid, initialQuery]);
   // Premade lookups land after the first answer; each one pushes a fuller team view.
-  useEffect(() => api.on<MmrTeamView>('mmr-team', (v) => target.current === v.puuid && setShown({ kind: 'me', tv: v })), []);
+  useEffect(() => api.on<MmrTeamView>('mmr-team', (v) => target.current === v.puuid && setShown(v)), []);
 
   if (!connected) return <div className="px-6 py-7 xl:px-8"><PageHeader title="Estimated MMR" /><ErrorNote>Needs tokens: start the Riot Client or sign in.</ErrorNote></div>;
 
   const pref = settings?.mmrView ?? 'auto';
-  const tv = shown?.kind === 'me' ? shown.tv : undefined;
+  const tv = shown ?? undefined;
   const mode: 'solo' | 'team' = !tv ? 'solo' : pref === 'auto' ? (stackedGames(tv.team.estimate.team) ? 'team' : 'solo') : pref;
-  const soloView = shown?.kind === 'other' ? shown.view : tv?.solo;
+  const soloView = tv?.solo;
   const picks = players.filter((p) => !p.isMe && !(p.incognito && !p.isMe) && p.name);
   return (
     <div className="mx-auto max-w-[1180px] px-6 pb-16 pt-7 xl:px-8">
@@ -490,7 +483,7 @@ export function MmrScreen({ connected, myPuuid, initialQuery, players }: { conne
             onChange={(v) => void saveSettings({ mmrView: v })}
           />
           {mode === 'team' && (
-            <Btn tone="ghost" size="sm" disabled={loading} onClick={() => myPuuid && void load(myPuuid, true)}>
+            <Btn tone="ghost" size="sm" disabled={loading} onClick={() => tv && void load(tv.puuid, true)}>
               <ArrowClockwise size={14} className={loading ? 'animate-spin' : undefined} /> Refresh
             </Btn>
           )}

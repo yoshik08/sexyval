@@ -371,6 +371,8 @@ export interface MmrMatchView extends MmrMatchRow {
   lobbyRank?: RankInfo;
   /** Team view: premade names in the match ("Hidden teammate" for hidden ones). */
   premadeNames?: string[];
+  /** Team view: enemy party sizes ("2+3", "solo"); undefined without party data. */
+  enemyStacks?: string;
 }
 
 /** Our own estimate; Riot doesn't expose MMR. */
