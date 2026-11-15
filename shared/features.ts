@@ -573,6 +573,26 @@ export interface LineupLibraryView {
   mapArt?: LineupMapArt;
 }
 
+// ---------- Encounters ----------
+
+/** You and another player in the same cached matches (from your side). */
+export interface Encounter {
+  puuid: string;
+  with: number;
+  against: number;
+  winsWith: number;
+  winsAgainst: number;
+  lastAt: number;
+  lastMatchId: string;
+  lastAgent?: string;
+  lastMap?: string;
+  /** Filled for lists (recent players). */
+  name?: string;
+  tag?: string;
+  agentIcon?: string;
+  mapName?: string;
+}
+
 // ---------- Spending ----------
 
 export interface SpendingState {

@@ -13,6 +13,7 @@ import { Btn } from '../components/kit';
 import { SkinTile, type TileData } from '../components/SkinTile';
 import { VirtualGrid } from '../components/VirtualGrid';
 import { openSkin } from '../components/SkinDetail';
+import { vpMoney } from '../lib/money';
 
 type Tab = 'skins' | 'buddy' | 'spray' | 'card' | 'title';
 const TABS: [Tab, string][] = [
@@ -227,6 +228,11 @@ export function CollectionScreen() {
   const shown = tab === 'skins' ? skins.length : extras.length;
   const filtered = !!(f.search || f.weaponId || f.tierId || f.tierIds?.length || f.themeId || f.owned !== 'all' || f.excludeBp);
 
+  const ownedVp = useMemo(() => {
+    if (!sets) return 0;
+    const vpOfId = vpOf(prices);
+    return catalog.skins.reduce((a, k) => (!k.source && isSkinOwned(k, sets) ? a + (vpOfId(k.id) ?? 0) : a), 0);
+  }, [sets, catalog.skins, prices]);
   const num = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => countTo(num.current, ownedNow), [ownedNow, tab]);
 
@@ -265,7 +271,9 @@ export function CollectionScreen() {
                 </span>
                 <span className="ml-1.5 text-md text-faint">of {fmtNum(totalNow)}</span>
               </div>
-              <div className="mt-1.5 text-xs text-muted">owned</div>
+              <div className="mt-1.5 text-xs text-muted">
+                owned{tab === 'skins' && ownedVp > 0 ? <span className="num" title="Store prices of the skins you own (Battle Pass and other rewards left out)"> · {fmtNum(ownedVp)} VP {vpMoney(ownedVp)}</span> : null}
+              </div>
             </div>
           )}
         </div>

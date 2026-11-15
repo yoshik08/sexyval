@@ -439,7 +439,7 @@ export function MmrScreen({ connected, myPuuid, initialQuery, players }: { conne
   };
   useEffect(() => {
     if (initialQuery) void load(initialQuery);
-    else if (connected && myPuuid && !shown) void load(myPuuid);
+    else if (connected && myPuuid && (!shown || (shown.solo.isMe && shown.puuid !== myPuuid))) void load(myPuuid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, myPuuid, initialQuery]);
   // Premade lookups land after the first answer; each one pushes a fuller team view.

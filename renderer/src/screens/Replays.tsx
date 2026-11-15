@@ -136,6 +136,7 @@ function Viewer({ id, onBack }: { id: string; onBack: () => void }) {
   const [speed, setSpeed] = useState<'0.5' | '1' | '2' | '4'>('2');
   const [focus, setFocus] = useState<string | undefined>();
   const [filter, setFilter] = useState<Filter>('all');
+  const [heat, setHeat] = useState(false);
   const tRef = useRef(0);
   tRef.current = t;
 
@@ -328,6 +329,18 @@ function Viewer({ id, onBack }: { id: string; onBack: () => void }) {
         <div className="relative mx-auto aspect-square w-full max-w-[min(640px,calc(100vh-330px))] overflow-hidden rounded-[24px] bg-[#0a0a0b] ring-1 ring-white/[0.07]">
           {v.minimap && <Img src={v.minimap} alt="" className="absolute inset-0 h-full w-full object-contain opacity-90" />}
           <svg viewBox="0 0 1000 1000" className="absolute inset-0 h-full w-full">
+            {heat &&
+              v.rounds.flatMap((rr) =>
+                rr.kills.flatMap((k, i) => {
+                  const dots: JSX.Element[] = [];
+                  // Following someone: their kills (where they stood) and deaths. Otherwise every death in the match.
+                  if (focus) {
+                    if (k.killer === focus && k.killerAt) dots.push(<circle key={`k${rr.n}-${i}`} cx={k.killerAt.x * 1000} cy={k.killerAt.y * 1000} r={14} fill={ALLY} opacity={0.35} />);
+                    if (k.victim === focus && k.victimAt) dots.push(<circle key={`d${rr.n}-${i}`} cx={k.victimAt.x * 1000} cy={k.victimAt.y * 1000} r={14} fill={ENEMY} opacity={0.45} />);
+                  } else if (k.victimAt) dots.push(<circle key={`a${rr.n}-${i}`} cx={k.victimAt.x * 1000} cy={k.victimAt.y * 1000} r={11} fill={colorOf(k.victim)} opacity={0.3} />);
+                  return dots;
+                }),
+              )}
             {flashes.map((k, i) =>
               k.killerAt && k.victimAt ? (
                 <line key={i} x1={k.killerAt.x * 1000} y1={k.killerAt.y * 1000} x2={k.victimAt.x * 1000} y2={k.victimAt.y * 1000} stroke={colorOf(k.killer)} strokeWidth={3} strokeDasharray="10 7" opacity={1 - (t - k.t) / 1400} />
@@ -430,6 +443,15 @@ function Viewer({ id, onBack }: { id: string; onBack: () => void }) {
           <span className="num ml-1 w-[88px] text-sm text-muted">
             {clock(t)} / {clock(r.length)}
           </span>
+          <button
+            type="button"
+            aria-pressed={heat}
+            onClick={() => setHeat((h) => !h)}
+            title={focus ? 'Every spot where the player you follow got a kill (green) or died (red), all rounds' : 'Where everyone died this match, coloured by team'}
+            className={cx('press h-8 rounded-full px-3 text-sm font-medium', heat ? 'bg-white text-black' : 'bg-white/[0.08] text-ink hover:bg-white/[0.14]')}
+          >
+            Heatmap
+          </button>
           <Segmented<'0.5' | '1' | '2' | '4'> size="sm" value={speed} onChange={setSpeed} options={[['0.5', '0.5×'], ['1', '1×'], ['2', '2×'], ['4', '4×']]} />
           <div className="ml-auto flex items-center gap-2">
             <Select<Filter> value={filter} onChange={setFilter} align="right" options={FILTERS.map((f) => ({ value: f.value, label: f.label, hint: f.needsFocus && !focus ? 'pick a player' : String(allEvents.filter((e) => f.kinds.includes(e.kind)).length) }))} />

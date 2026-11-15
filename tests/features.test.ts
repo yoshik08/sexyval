@@ -188,3 +188,18 @@ describe('friend presence', () => {
     expect(friendPresence([{ product: 'riot_client', state: 'offline' }]).online).toBe(false);
   });
 });
+
+describe('friend watch', () => {
+  it('alerts only for watched friends that come online or leave a match, never on first sight', async () => {
+    const { watchEvents } = await import('../main/services/hub');
+    const W = new Set(['a', 'b']);
+    expect(watchEvents(new Map(), [{ puuid: 'a', name: 'A', online: true, status: 'In menus' }], W)).toEqual([]);
+    const prev = new Map<string, string | undefined>([['a', undefined], ['b', 'In game 7-5'], ['c', undefined]]);
+    const now = [
+      { puuid: 'a', name: 'A', online: true, status: 'In menus' },
+      { puuid: 'b', name: 'B', online: true, status: 'In menus' },
+      { puuid: 'c', name: 'C', online: true, status: 'In menus' },
+    ];
+    expect(watchEvents(prev, now, W)).toEqual(['A is online (In menus)', 'B finished a match (7-5)']);
+  });
+});

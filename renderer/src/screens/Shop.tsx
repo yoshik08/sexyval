@@ -13,6 +13,7 @@ import { SkinTile, type TileData } from '../components/SkinTile';
 import { openSkin } from '../components/SkinDetail';
 import { PastBundles, ShopCalendar } from './StoreArchive';
 import { SpendingPanel } from './Spending';
+import { vpMoney } from '../lib/money';
 
 type Tab = 'daily' | 'bundles' | 'night' | 'past' | 'history' | 'spending';
 
@@ -73,6 +74,20 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
   if (night) options.push(['night', 'Night Market']);
   options.push(['past', 'Past bundles'], ['history', 'History'], ['spending', 'Spending']);
   const archive = active === 'past' || active === 'history';
+  // Daily: what the whole store costs and how much of it you own. Night Market: what the discounts save.
+  const storeLine = (() => {
+    if (active === 'daily' && shop?.daily.length) {
+      const total = shop.daily.reduce((a, i) => a + (i.cost || 0), 0);
+      const owned = shop.daily.filter((i) => i.owned).length;
+      return `${fmtNum(total)} VP for all ${shop.daily.length} (${vpMoney(total)})${owned ? ` · ${owned} owned` : ''}`;
+    }
+    if (active === 'night' && night?.items.length) {
+      const saved = night.items.reduce((a, i) => a + Math.max(0, (i.baseCost || 0) - (i.cost || 0)), 0);
+      const total = night.items.reduce((a, i) => a + (i.cost || 0), 0);
+      return `${fmtNum(total)} VP for all · saves ${fmtNum(saved)} VP (${vpMoney(saved)}) vs full price`;
+    }
+    return null;
+  })();
 
   const tile = (i: ShopItem, source: string, sale?: boolean): TileData => {
     const sk = i.skinId ? skinById.get(i.skinId) : undefined;
@@ -103,7 +118,10 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
       <div className="flex items-end justify-between gap-8">
         <div>
           <h1 className="t-title text-page">{active === 'night' ? 'Night Market' : active === 'bundles' ? 'Bundles' : active === 'past' ? 'Past bundles' : active === 'history' ? 'Store history' : active === 'spending' ? 'Spending' : 'Daily Store'}</h1>
-          <p className="num mt-1.5 h-5 text-sm text-muted">{active === 'spending' ? 'VP purchases, money spent and what the account is worth.' : archive ? 'Every store SexyVal has seen, kept after it rotates.' : endsAt ? <>Resets in {countdown(endsAt - now)}</> : null}</p>
+          <p className="num mt-1.5 h-5 text-sm text-muted">
+            {active === 'spending' ? 'VP purchases, money spent and what the account is worth.' : archive ? 'Every store SexyVal has seen, kept after it rotates.' : endsAt ? <>Resets in {countdown(endsAt - now)}</> : null}
+            {storeLine && <span className="text-faint"> · {storeLine}</span>}
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-5 xl:gap-7">
           {shop?.wallet ? (

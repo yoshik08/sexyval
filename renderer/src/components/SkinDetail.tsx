@@ -10,6 +10,7 @@ import { Btn } from './kit';
 import { Img, PriceTag, TierMark, tint } from './ui';
 import { VideoPlayer } from './VideoPlayer';
 import { fmtDay, useSeen } from '../lib/shopHistory';
+import { vpMoney } from '../lib/money';
 
 /** Extra facts when the skin is opened from the store (price you actually see, discount, where it is). */
 export interface SkinContext {
@@ -212,11 +213,13 @@ function Body({ skin, ctx }: { skin: CatalogSkin; ctx?: SkinContext }) {
                 {ctx.basePrice && ctx.basePrice !== ctx.price && <span className="num text-sm text-faint line-through">{fmtNum(ctx.basePrice)}</span>}
                 {ctx.discountPercent ? <span className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-black">-{ctx.discountPercent}%</span> : null}
               </div>
+              <p className="num mt-1.5 text-sm text-muted" title="At the 1,000 VP pack price">{vpMoney(ctx.price)}</p>
               {ctx.source && <p className="mt-2 text-sm text-muted">In your store · {ctx.source}</p>}
             </>
           ) : (
             <>
               <PriceTag quote={quote} size="lg" className="[&_.t-num]:text-[36px] [&_.t-num]:leading-none" />
+              {(quote?.kind === 'exact' || quote?.kind === 'approx') && <p className="num mt-1.5 text-sm text-muted" title="At the 1,000 VP pack price">{vpMoney(quote.vp)}</p>}
               {caption && <p className="text-pretty mt-2 text-sm text-muted">{caption}</p>}
             </>
           )}

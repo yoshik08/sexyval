@@ -3,14 +3,16 @@ import type { AppState, Connection, View } from '../../shared/types';
 import type { UiResumeState } from '../../shared/update';
 import { api } from './lib/api';
 import { cx } from './lib/format';
-import { Broadcast, Compass, Crosshair, FilmStrip, Gauge, GearSix, MapPin, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
+import { MagnifyingGlass, Broadcast, Compass, Crosshair, FilmStrip, Gauge, GearSix, MapPin, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
 import { withViewTransition } from './lib/motion';
-import { playerNavStore, startStores, useLoadoutDirty, useSettings, useStore, useVideoPlaying } from './lib/store';
+import { openPlayer, playerNavStore, startStores, useLoadoutDirty, useSettings, useStore, useVideoPlaying } from './lib/store';
 import { MmrScreen } from './screens/Mmr';
 import { Toasts } from './components/ui';
 import { closeSkin, SkinDetail } from './components/SkinDetail';
 import { Btn } from './components/kit';
 import { WarpRow } from './components/warp';
+import { CommandPalette, type PaletteNav } from './components/CommandPalette';
+import { WhatsNew } from './components/WhatsNew';
 import { LiveScreen } from './screens/Live';
 import { ShopScreen } from './screens/Shop';
 import { SettingsScreen } from './screens/Settings';
@@ -43,6 +45,27 @@ const GROUPS: NavItem[][] = [
   ],
 ];
 const SETTINGS: NavItem = { id: 'settings', label: 'Settings', Icon: GearSix };
+/** Sidebar order for Ctrl+1…0. */
+const ORDER: View[] = GROUPS.flat().map((g) => g.id);
+const PALETTE: PaletteNav[] = [
+  ...GROUPS.flat().map((g) => ({ label: g.label, view: g.id })),
+  { label: 'Settings', view: 'settings', sub: 'general' },
+  { label: 'Night Market', hint: 'Store', view: 'shop', sub: 'night' },
+  { label: 'Bundles', hint: 'Store', view: 'shop', sub: 'bundles' },
+  { label: 'Past bundles', hint: 'Store', view: 'shop', sub: 'past' },
+  { label: 'Store history', hint: 'Store', view: 'shop', sub: 'history' },
+  { label: 'Spending & account value', hint: 'Store', view: 'shop', sub: 'spending' },
+  { label: 'Friends', hint: 'Hub', view: 'hub', sub: 'friends' },
+  { label: 'Leaderboard', hint: 'Hub', view: 'hub', sub: 'leaderboard' },
+  { label: 'Agents', hint: 'Hub', view: 'hub', sub: 'agents' },
+  { label: 'Maps', hint: 'Hub', view: 'hub', sub: 'maps' },
+  { label: 'Weapons', hint: 'Hub', view: 'hub', sub: 'weapons' },
+  { label: 'My lineups', hint: 'Lineups', view: 'lineups', sub: 'mine' },
+  { label: 'Accounts', hint: 'Settings', view: 'settings', sub: 'accounts' },
+  { label: 'Stretch', hint: 'Settings', view: 'settings', sub: 'stretch' },
+  { label: 'Boost', hint: 'Settings', view: 'settings', sub: 'boost' },
+  { label: 'Diagnostics', hint: 'Settings', view: 'settings', sub: 'debug' },
+];
 
 function Wordmark() {
   return (
@@ -82,7 +105,7 @@ function ConnectionPill({ conn }: { conn?: Connection }) {
   );
 }
 
-function Sidebar({ view, go, conn }: { view: View; go: (v: View) => void; conn?: Connection }) {
+function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View) => void; conn?: Connection; onSearch: () => void }) {
   const wrap = useRef<HTMLDivElement>(null);
   const highlight = useRef<HTMLSpanElement>(null);
   // Mirrors `view` for the ResizeObserver/font callbacks below, so `measure` can stay referentially
@@ -138,6 +161,11 @@ function Sidebar({ view, go, conn }: { view: View; go: (v: View) => void; conn?:
       <div className="drag absolute inset-x-0 top-0 flex h-10 items-center px-5">
         <Wordmark />
       </div>
+      <button type="button" onClick={onSearch} className="press mb-4 flex h-9 w-full items-center gap-2.5 rounded-xl bg-white/[0.05] px-3 text-left text-sm text-muted hover:bg-white/[0.09] hover:text-ink" title="Jump to anything (Ctrl+K)">
+        <MagnifyingGlass size={15} weight="bold" />
+        <span className="flex-1">Search</span>
+        <kbd className="rounded-md bg-white/[0.08] px-1.5 py-px text-2xs text-faint">Ctrl K</kbd>
+      </button>
       <div ref={wrap} className="relative flex flex-1 flex-col gap-5 overflow-y-auto">
         <span
           ref={highlight}
@@ -175,6 +203,7 @@ export function App() {
   const [profileTab, setProfileTab] = useState<'history' | 'lifetime' | undefined>();
   const [mmrQuery, setMmrQuery] = useState<string | undefined>();
   const [alert, setAlert] = useState<Alert | null>(null);
+  const [palette, setPalette] = useState(false);
   const playerNav = useStore(playerNavStore);
   const settings = useSettings();
   const videoPlaying = useVideoPlaying();
@@ -259,13 +288,33 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerNav?.n]);
 
+  // Ctrl+K palette, Ctrl+1…0 sidebar items.
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPalette((p) => !p);
+      } else if (/^[0-9]$/.test(e.key)) {
+        const v = ORDER[e.key === '0' ? 9 : Number(e.key) - 1];
+        if (v) {
+          e.preventDefault();
+          setPalette(false);
+          go(v);
+        }
+      }
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  });
+
   const connected = state?.conn.status === 'connected';
   const valorant = !!state?.conn.valorant;
   const matchPlayers = [...(state?.pregame?.allies ?? []), ...(state?.coregame?.myTeam ?? []), ...(state?.coregame?.enemyTeam ?? [])];
 
   return (
     <div className="flex h-full">
-      <Sidebar view={view} go={go} conn={state?.conn} />
+      <Sidebar view={view} go={go} conn={state?.conn} onSearch={() => setPalette(true)} />
       <main className="relative min-w-0 flex-1 overflow-hidden">
         {/* window drag strip; stops short of the native window controls */}
         <div className="drag absolute inset-x-0 top-0 z-20 h-10 pr-[148px]" />
@@ -329,6 +378,8 @@ export function App() {
           </div>
         </div>
       )}
+      <CommandPalette open={palette} onClose={() => setPalette(false)} navs={PALETTE} go={(v, t) => go(v as View, t)} openPlayer={openPlayer} />
+      <WhatsNew />
       <Toasts />
     </div>
   );

@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { api } from '../lib/api';
 import { cx } from '../lib/format';
 import { showToast } from './ui';
+import { Btn } from './kit';
+import { Copy } from '../lib/icons';
 
 /** Copies "Name#Tag" to the clipboard and confirms with a short toast. */
 export async function copyRiotId(name?: string, tag?: string): Promise<void> {
@@ -45,5 +47,30 @@ export function PlayerName({ name, tag, className, tagClassName = 'text-faint', 
       {tag && <span className={tagClassName}>#{tag}</span>}
       {children}
     </span>
+  );
+}
+
+/** Copies every visible Riot ID in a lobby, one per line, grouped by team (for trackers / reports). */
+export function CopyLobby({ players, label = 'Copy names' }: { players: { name?: string; tag?: string; team?: string }[]; label?: string }) {
+  const named = players.filter((p) => p.name);
+  if (!named.length) return null;
+  const teams = [...new Set(named.map((p) => p.team ?? ''))];
+  const text = teams.map((t) => named.filter((p) => (p.team ?? '') === t).map((p) => (p.tag ? `${p.name}#${p.tag}` : p.name)).join('\n')).join('\n\n');
+  return (
+    <Btn
+      size="sm"
+      tone="ghost"
+      title="Copies every Name#Tag, one per line, teams separated"
+      onClick={async () => {
+        try {
+          await api.rpc('clipboard:write', text);
+          showToast(`Copied ${named.length} names`);
+        } catch {
+          showToast('Could not copy', 'error');
+        }
+      }}
+    >
+      <Copy size={14} /> {label}
+    </Btn>
   );
 }

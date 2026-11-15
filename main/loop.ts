@@ -222,9 +222,10 @@ export class GameLoop {
 
   private onConnected(me: string): void {
     if (this.lastPuuid === me) return;
+    const switched = !!this.lastPuuid;
     this.lastPuuid = me;
-    log.info(`Connected (${this.d.session.tokenSource})`);
-    this.d.toast('info', this.d.session.tokenSource === 'signin' ? `Signed in as ${this.d.session.accountLabel ?? 'account'}` : 'Connected to the Riot Client');
+    log.info(`Connected (${this.d.session.tokenSource})${switched ? ', account switched' : ''}`);
+    this.d.toast('info', this.d.session.tokenSource === 'signin' ? `Signed in as ${this.d.session.accountLabel ?? 'account'}` : switched ? 'Switched Riot account: reloading your store, collection and profile' : 'Connected to the Riot Client');
     this.d.onAccount?.(me);
     this.d.shop.start(me);
     this.d.names.request([me]);

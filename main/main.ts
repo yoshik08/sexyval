@@ -46,6 +46,8 @@ import { WarpService } from './services/warp';
 import { LineupLibrary } from './services/lineupLibrary';
 import { ReplayService, demosDir } from './services/replays';
 import { SpendingService } from './services/spending';
+import { EncounterService } from './services/encounters';
+import { makeBackup, restoreBackup } from './services/backup';
 
 const MOCK = process.env.MOCK === '1';
 const SHOTS = process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS;
@@ -373,9 +375,18 @@ async function startServices(): Promise<void> {
   const squad = new SquadService({ api, assets, catalog, history, names, profiles, mmr: mmrEstimate, isHidden: hiddenInMatch, livePenalty: () => loop?.partyPenalty(), onUpdate: (v) => send('mmr-team', v) });
   const hub = new HubService(api, assets, catalog, dataDir('lineups.json'), dataDir('lineups'));
   const lineupLibrary = new LineupLibrary(dataDir('lineup-library'));
+  const encounters = new EncounterService(dataDir('matches'), () => session.puuid);
   const replays = new ReplayService(api, assets, catalog, history, names, dataDir('replays'));
   const spending = new SpendingService(api, catalog, dataDir('spending.json'), dataDir('fx.json'), () => send('spending', Date.now()));
   handleLocal(dataDir('lineups'));
+  // Friend watch: watched friends coming online / finishing a match, from the Riot Client's local chat API.
+  setInterval(() => {
+    if (quiet) return;
+    void hub
+      .pollWatched()
+      .then((msgs) => msgs.forEach((m) => notify('Friend', m)))
+      .catch(() => undefined);
+  }, 20_000);
 
   loop = new GameLoop({
     session,
@@ -559,7 +570,9 @@ async function startServices(): Promise<void> {
     'hub:friends': () => hub.friends(),
     'hub:friendRequest': (nt: unknown) => hub.sendFriendRequest(str(nt, 64)),
     'hub:cancelRequest': (p: unknown) => hub.cancelFriendRequest(str(p, 64)),
-    'hub:leaderboard': (season: unknown, start: unknown) => hub.leaderboard(typeof season === 'string' ? season : undefined, Number(start) || 0),
+    'hub:leaderboard': (season: unknown, start: unknown, q: unknown) => hub.leaderboard(typeof season === 'string' ? season : undefined, Number(start) || 0, typeof q === 'string' ? q.slice(0, 32).trim() : undefined),
+    'hub:watchList': () => hub.watchList(),
+    'hub:watch': (p: unknown, on: unknown) => hub.setWatch(str(p, 64), on === true),
     'hub:acts': () => hub.acts(),
     'hub:lineups': () => hub.lineups(),
     'hub:saveLineup': (l: unknown) => hub.saveLineup(l as any),
@@ -575,6 +588,57 @@ async function startServices(): Promise<void> {
     'spending:commit': (rows: unknown) => spending.commit(rows as any),
     'spending:openRiot': () => spending.openRiot(win),
     'spending:scanRiot': (dayFirst: unknown) => spending.scanRiot(dayFirst === true),
+    'encounters:get': (ids: unknown) => {
+      if (!Array.isArray(ids) || ids.length > 40) throw new Error('bad argument');
+      return encounters.get(ids.map((x) => str(x, 64)).filter((p) => !hiddenInMatch(p)));
+    },
+    'encounters:recent': async () => {
+      const list = (await encounters.recent(40)).filter((e) => !hiddenInMatch(e.puuid));
+      await names.waitFor(list.map((e) => e.puuid), 2500);
+      return list.map((e) => ({ ...e, name: names.get(e.puuid)?.name, tag: names.get(e.puuid)?.tag, agentIcon: assets.agent(e.lastAgent)?.icon, mapName: assets.mapName(e.lastMap) }));
+    },
+    'backup:export': async () => {
+      const r = await dialog.showSaveDialog(win!, { title: 'Back up SexyVal', defaultPath: `SexyVal-backup-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: 'SexyVal backup', extensions: ['json'] }] });
+      if (r.canceled || !r.filePath) return null;
+      const b = await makeBackup(dataDir, getSettings());
+      await fsp.writeFile(r.filePath, JSON.stringify(b, null, 1));
+      return { path: r.filePath, files: Object.keys(b.files).length };
+    },
+    'backup:import': async () => {
+      const r = await dialog.showOpenDialog(win!, { title: 'Restore a SexyVal backup', properties: ['openFile'], filters: [{ name: 'SexyVal backup', extensions: ['json'] }] });
+      if (r.canceled || !r.filePaths[0]) return null;
+      const { settings, restored } = await restoreBackup(dataDir, await fsp.readFile(r.filePaths[0], 'utf8'));
+      updateSettings(settings);
+      toast('info', `Restored ${restored.length} file${restored.length === 1 ? '' : 's'}. Restarting…`);
+      // Services read their files at start: a relaunch picks everything up.
+      setTimeout(() => {
+        quitting = true;
+        app.relaunch();
+        app.exit(0);
+      }, 1500);
+      return { restored };
+    },
+    'spending:csv': async (csv: unknown) => {
+      const r = await dialog.showSaveDialog(win!, { title: 'Export purchases', defaultPath: `SexyVal-purchases-${new Date().toISOString().slice(0, 10)}.csv`, filters: [{ name: 'CSV', extensions: ['csv'] }] });
+      if (r.canceled || !r.filePath) return null;
+      await fsp.writeFile(r.filePath, '﻿' + str(csv, 2_000_000)); // BOM: Excel reads ₹ correctly
+      return r.filePath;
+    },
+    // Once per new version: that release's notes from GitHub (none on a first install or a failed fetch).
+    'app:whatsNew': async () => {
+      const file = dataDir('last-version.txt');
+      const v = app.getVersion();
+      const prev = (await fsp.readFile(file, 'utf8').catch(() => '')).trim();
+      await fsp.writeFile(file, v).catch(() => undefined);
+      if (!prev || prev === v || MOCK) return null;
+      try {
+        const r = await fetch(`https://api.github.com/repos/yoshik08/sexyval/releases/tags/v${v}`, { headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(8000) });
+        const j: any = await r.json();
+        return typeof j?.body === 'string' && j.body.trim() ? { version: v, from: prev, notes: j.body.slice(0, 8000) } : null;
+      } catch {
+        return null;
+      }
+    },
     'replays:list': () => replays.list(),
     'replays:get': (id: unknown, force: unknown) => replays.get(str(id, 64), force === true),
     'replays:reveal': async (id: unknown) => {
@@ -594,7 +658,7 @@ async function startServices(): Promise<void> {
       return hub.importImage(r.filePaths[0]);
     },
     'ui:report': (v: unknown) => resume?.report(uiReport(v)),
-    'clipboard:write': (text: unknown) => clipboard.writeText(str(text, 200)),
+    'clipboard:write': (text: unknown) => clipboard.writeText(str(text, 4000)),
     'update:status': () => updater?.status,
     'update:check': () => updater?.checkNow(),
     'update:install': () => updater?.installNow(),

@@ -3,12 +3,37 @@ import type { LibraryLineup, LineupLibraryView, Lineup } from '../../../shared/f
 import { ago, cx } from '../lib/format';
 import { img } from '../lib/media';
 import { saveSettings, useSettings } from '../lib/store';
-import { ArrowClockwise, ArrowSquareOut, MapPin, Play, X } from '../lib/icons';
+import { ArrowClockwise, ArrowSquareOut, MapPin, Play, Star, X } from '../lib/icons';
 import { Img, Panel, Segmented, Select, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, Note, PageHeader, useRpc } from '../components/kit';
 import { VideoPlayer } from '../components/VideoPlayer';
 
 type Tab = 'library' | 'mine';
+
+const FAV_KEY = 'sexyval.lineups.favorites';
+function readFavs(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(FAV_KEY) ?? '[]'));
+  } catch {
+    return new Set();
+  }
+}
+function useFavs() {
+  const [favs, setFavs] = useState(readFavs);
+  const toggle = (key: string) =>
+    setFavs((f) => {
+      const n = new Set(f);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      try {
+        localStorage.setItem(FAV_KEY, JSON.stringify([...n]));
+      } catch {
+        // storage blocked: favourites last this session
+      }
+      return n;
+    });
+  return { favs, toggle };
+}
 type Side = 'all' | 'attack' | 'defense';
 
 const prettyAbility = (k?: string) =>
@@ -93,6 +118,9 @@ function Library() {
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState<LibraryLineup | null>(null);
   const [hover, setHover] = useState<string | null>(null);
+  const { favs, toggle } = useFavs();
+  const [onlyFavs, setOnlyFavs] = useState(false);
+  const favKey = (l: LibraryLineup) => `${v?.agent}/${v?.map}/${l.id}`;
   useEffect(() => {
     if (!agent && agents.length) setAgent((agents.find((a) => a.name === 'Sova') ?? agents[0]).name);
     if (!map && maps.length) setMap((maps.find((m) => m.name === 'Ascent') ?? maps[0]).name);
@@ -110,7 +138,9 @@ function Library() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent, map]);
   const abilities = useMemo(() => [...new Set((v?.lineups ?? []).map((l) => l.ability).filter(Boolean) as string[])], [v]);
-  const shown = (v?.lineups ?? []).filter((l) => (side === 'all' || l.side === side) && (!ability || l.ability === ability));
+  const shown = (v?.lineups ?? [])
+    .filter((l) => (side === 'all' || l.side === side) && (!ability || l.ability === ability) && (!onlyFavs || favs.has(`${v?.agent}/${v?.map}/${l.id}`)))
+    .sort((a, b) => Number(favs.has(`${v?.agent}/${v?.map}/${b.id}`)) - Number(favs.has(`${v?.agent}/${v?.map}/${a.id}`)));
   const agentRow = agents.find((a) => a.name === agent);
   if (!browse.data) return <Skeleton className="h-64" />;
   return (
@@ -134,6 +164,9 @@ function Library() {
         <Select value={map} onChange={setMap} options={maps.map((m) => ({ value: m.name, label: m.name }))} />
         <Segmented<Side> size="sm" value={side} onChange={setSide} options={[['all', 'Both sides'], ['attack', 'Attack'], ['defense', 'Defense']]} />
         {abilities.length > 1 && <Select value={ability} onChange={setAbility} options={[{ value: '', label: 'All abilities' }, ...abilities.map((a) => ({ value: a, label: prettyAbility(a) }))]} />}
+        <button type="button" aria-pressed={onlyFavs} onClick={() => setOnlyFavs((x) => !x)} className={cx('press inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-sm font-medium', onlyFavs ? 'bg-white text-black' : 'bg-white/[0.08] text-muted hover:text-ink')}>
+          <Star size={13} weight={onlyFavs ? 'fill' : 'bold'} /> Favourites
+        </button>
         <div className="ml-auto flex items-center gap-2 text-xs text-muted">
           {v?.fetchedAt && <span>{v.stale ? 'Offline copy · ' : ''}updated {ago(v.fetchedAt)}</span>}
           <Btn tone="ghost" size="sm" onClick={() => void load(true)} disabled={loading}>
@@ -170,6 +203,25 @@ function Library() {
                     <div className="relative aspect-video bg-black">
                       {l.thumbnail && <Img src={img(l.thumbnail)} alt="" className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />}
                       <span className="num absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-[11px] font-semibold text-ink">{i + 1}</span>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={favs.has(favKey(l))}
+                        title={favs.has(favKey(l)) ? 'Remove from favourites' : 'Add to favourites'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggle(favKey(l));
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.stopPropagation();
+                            toggle(favKey(l));
+                          }
+                        }}
+                        className={cx('absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-black/70', favs.has(favKey(l)) ? 'text-warn' : 'text-ink/70 hover:text-ink')}
+                      >
+                        <Star size={14} weight={favs.has(favKey(l)) ? 'fill' : 'bold'} />
+                      </span>
                       {l.video && (
                         <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover:opacity-100">
                           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-black">

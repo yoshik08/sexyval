@@ -23,6 +23,11 @@ const CLIENT_PLATFORM_BASE = {
 
 const USER_AGENT = 'ShooterGame/13 Windows/10.0.19043.1.256.64bit';
 const TOKEN_TTL_MS = 30 * 60 * 1000;
+/**
+ * Switching accounts inside the Riot Client keeps the same process and lockfile, so the signed-in account is
+ * re-read this often (a local call). Without it a switch only showed up after the 30 min token refresh.
+ */
+export const ACCOUNT_CHECK_MS = 4000;
 
 /** No usable tokens at all (no Riot Client, not signed in). */
 export class WaitingError extends Error {}
@@ -180,6 +185,7 @@ export class RiotSession {
       this.lastSessions = sessions.json;
       this.valorantRunning = hasValorantSession(sessions.json);
       if (!this.localAuth || Date.now() - this.localAuth.at > TOKEN_TTL_MS) await this.refreshLocalAuth();
+      else if (Date.now() - this.accountCheckedAt > ACCOUNT_CHECK_MS) await this.refreshLocalAuth(true);
       this.riotClient = this.localAuth ? 'up' : 'down';
     } catch (e) {
       if (!(e instanceof WaitingError)) log.warn('Riot Client probe failed', e);
@@ -189,7 +195,12 @@ export class RiotSession {
     }
   }
 
-  private async refreshLocalAuth(): Promise<void> {
+  private accountCheckedAt = 0;
+
+  /** quiet: the periodic account check; logs only when the account actually changed. */
+  private async refreshLocalAuth(quiet = false): Promise<void> {
+    this.accountCheckedAt = Date.now();
+    const prev = this.localAuth?.subject;
     const res = await this.local('/entitlements/v1/token');
     const j = res.json;
     const accessToken = typeof j?.accessToken === 'string' ? j.accessToken : '';
@@ -199,9 +210,14 @@ export class RiotSession {
       this.localAuth = null;
       throw new Error(`Riot Client not signed in (entitlements ${res.status})`);
     }
+    if (quiet && prev === subject && this.localAuth) {
+      // Same account: keep the timestamp (the 30 min refresh still runs), take the newer tokens.
+      this.localAuth = { ...this.localAuth, accessToken, entitlement };
+      return;
+    }
     this.localAuth = { accessToken, entitlement, subject, at: Date.now() };
     this.opts.onRaw?.('entitlements', { subject, hasAccessToken: true, hasEntitlement: true, keys: Object.keys(j) });
-    log.info('Tokens refreshed (Riot Client)');
+    log.info(prev && prev !== subject ? 'Riot Client account switched' : 'Tokens refreshed (Riot Client)');
   }
 
   /** Kept for callers that force a refresh after a 400/401. */

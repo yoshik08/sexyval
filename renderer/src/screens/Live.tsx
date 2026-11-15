@@ -7,7 +7,8 @@ import { saveSettings, useSettings } from '../lib/store';
 import { Btn } from '../components/kit';
 import { Img, Last5Pips, Panel, SectionTitle, Segmented, SideBadge, Skeleton, tint } from '../components/ui';
 import { ExpandPanel, isHidden, PartyBar, PartyChip, PlayerDetail, RankPair, rowHandlers, ScoreBadge, useDensity, useExpansion } from '../components/players';
-import { PlayerName } from '../components/PlayerName';
+import { CopyLobby, PlayerName } from '../components/PlayerName';
+import { EncounterChip } from '../components/Encounter';
 
 export function LiveScreen({ state, onLoadout }: { state: AppState | null; onLoadout: () => void }) {
   if (!state) return <Waiting message="Starting…" />;
@@ -212,6 +213,7 @@ function AllyCard({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<t
             {hidden ? <span className="italic text-faint">Hidden</span> : p.name ? <PlayerName name={p.name} tag={p.tag} /> : <Skeleton className="mt-1 h-3.5 w-24" />}
           </div>
           {hidden && p.accountLevel != null && <div className="text-xs text-faint">Level {p.accountLevel}</div>}
+          {!hidden && !p.isMe && <div className="mt-1"><EncounterChip puuid={p.puuid} /></div>}
           {p.partyGroup && <div className="mt-1.5"><PartyChip p={p} /></div>}
         </div>
         <div className="mt-auto flex flex-col gap-2.5 border-t border-white/[0.07] pt-3">
@@ -335,6 +337,7 @@ function PlayerLine({ p, open, x, enemy }: { p: PlayerRow; open: boolean; x: Ret
               </span>
               {p.isMe && <span className="shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-2xs font-semibold text-ink">You</span>}
               <PartyChip p={p} enemy={enemy} />
+              <EncounterChip puuid={p.puuid} skip={hidden || p.isMe} />
             </div>
             <div className="truncate text-xs text-muted">
               {p.agent?.name ?? '—'}
@@ -397,7 +400,10 @@ function InGame({ v }: { v: CoreGameView }) {
       </div>
       <div className="flex items-center justify-between gap-4 px-6 pt-5 xl:px-8">
         <p className="text-xs text-faint">Click a player for ranks, SV Score, their last five, lifetime stats and estimated MMR. Hidden players are not looked up.</p>
-        <DensityToggle />
+        <div className="flex shrink-0 items-center gap-2">
+          <CopyLobby players={[...v.myTeam.map((p) => ({ p, team: 'A' })), ...v.enemyTeam.map((p) => ({ p, team: 'B' }))].filter(({ p }) => !(p.incognito && !p.isMe)).map(({ p, team }) => ({ name: p.name, tag: p.tag, team }))} />
+          <DensityToggle />
+        </div>
       </div>
       <div ref={wrap} className="grid grid-cols-2 items-start gap-4 px-6 py-5 xl:gap-5 xl:px-8">
         <TeamColumn title="Your team" rows={v.myTeam} tone="ally" density={density} />

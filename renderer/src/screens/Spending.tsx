@@ -198,6 +198,23 @@ export function SpendingPanel({ wallet }: { wallet?: number }) {
             <span className="label">Purchases · {s.purchases.length}</span>
             {s.purchases.length > 0 && (
               <button
+                className="ml-auto mr-4 text-xs text-muted hover:text-ink"
+                onClick={async () => {
+                  const esc = (v: unknown) => (/[",\n]/.test(String(v ?? '')) ? `"${String(v).replace(/"/g, '""')}"` : String(v ?? ''));
+                  const rows = [['Date', 'VP', 'Paid', 'Currency', `Paid (${currency})`, 'Source', 'Refunded'], ...s.purchases.map((p) => {
+                    const conv = p.amount != null && p.currency ? (p.currency === currency ? p.amount : convert(p.amount, p.currency, currency, s.fx)) : p.vp * perVp;
+                    return [new Date(p.at).toISOString().slice(0, 10), p.vp, p.amount ?? '', p.currency ?? '', conv != null ? conv.toFixed(2) : '', p.source, p.refunded ? 'yes' : ''];
+                  })];
+                  const r = await act<string | null>('spending:csv', rows.map((r) => r.map(esc).join(',')).join('\r\n'));
+                  if (r.ok && r.data) showToast('Purchases exported');
+                  else if (!r.ok) showToast(r.error, 'error');
+                }}
+              >
+                Export CSV
+              </button>
+            )}
+            {s.purchases.length > 0 && (
+              <button
                 className="text-xs text-faint hover:text-loss"
                 onClick={async () => {
                   if (!window.confirm('Remove every purchase from this list?')) return;

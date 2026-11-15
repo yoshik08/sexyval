@@ -53,7 +53,51 @@ export function friendPresence(list: any[]): { online: boolean; state?: string; 
   return { online: true, state: pick.state, product: pick.product, status: status ?? 'Online', platform: val ? 'valorant' : mobile ? 'mobile' : 'client', valorant: dec };
 }
 
+/** Pure: which watched friends changed in a way worth a notification. */
+export function watchEvents(prev: Map<string, string | undefined>, now: { puuid: string; name: string; online: boolean; status?: string }[], watched: Set<string>): string[] {
+  const out: string[] = [];
+  for (const f of now) {
+    if (!watched.has(f.puuid)) continue;
+    const before = prev.get(f.puuid);
+    const st = f.online ? (f.status ?? 'Online') : undefined;
+    if (!prev.has(f.puuid)) continue; // first sighting this session: no alert
+    if (!before && st) out.push(`${f.name} is online${st !== 'Online' ? ` (${st})` : ''}`);
+    else if (before?.startsWith('In game') && st && !st.startsWith('In game')) out.push(`${f.name} finished a match${before.slice(7) ? ` (${before.slice(8)})` : ''}`);
+  }
+  return out;
+}
+
 export class HubService {
+  private watched: Set<string> | null = null;
+  private lastSeen = new Map<string, string | undefined>();
+
+  private get watchFile() {
+    return path.join(path.dirname(this.lineupFile), 'friend-watch.json');
+  }
+
+  async watchList(): Promise<string[]> {
+    this.watched ??= new Set(await readJson<string[]>(this.watchFile, []));
+    return [...this.watched];
+  }
+
+  async setWatch(puuid: string, on: boolean): Promise<string[]> {
+    await this.watchList();
+    if (on) this.watched!.add(puuid);
+    else this.watched!.delete(puuid);
+    await writeJson(this.watchFile, [...this.watched!]);
+    return [...this.watched!];
+  }
+
+  /** Background check (Riot Client's local chat API only): messages for watched friends that came online / left a match. */
+  async pollWatched(): Promise<string[]> {
+    const list = await this.watchList();
+    if (!list.length || !this.api.session.localAvailable) return [];
+    const { friends } = await this.friends();
+    const msgs = watchEvents(this.lastSeen, friends, new Set(list));
+    for (const f of friends) this.lastSeen.set(f.puuid, f.online ? (f.status ?? 'Online') : undefined);
+    return msgs;
+  }
+
   constructor(
     private readonly api: RiotApi,
     private readonly assets: AssetService,
@@ -114,13 +158,13 @@ export class HubService {
   }
 
   // ---- leaderboard ----
-  async leaderboard(seasonId?: string, startIndex = 0): Promise<LeaderboardView> {
+  async leaderboard(seasonId?: string, startIndex = 0, query?: string): Promise<LeaderboardView> {
     const now = Date.now();
     const acts = this.catalog.browse.seasons.filter((s: any) => s.type === 'Act');
     const season = seasonId ? acts.find((s: any) => s.id === seasonId) : acts.find((s: any) => Date.parse(s.start) <= now && now < Date.parse(s.end));
     if (!season) return { status: 'error', error: 'No act found in the catalog', players: [] };
     try {
-      const r = await this.api.leaderboard(season.id, startIndex, 50);
+      const r = await this.api.leaderboard(season.id, query ? 0 : startIndex, 50, query || undefined);
       const cards = this.catalog.catalog.cards;
       return {
         status: 'ready',

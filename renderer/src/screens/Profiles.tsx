@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { MatchDetailView, ProfileView } from '../../../shared/features';
+import type { Encounter, MatchDetailView, ProfileView } from '../../../shared/features';
 import type { MmrState } from '../../../shared/types';
 import { ArrowRight } from '../lib/icons';
 import { analyzeMatches, filterMatches, type HistoryFilter } from '../../../shared/stats';
@@ -10,11 +10,12 @@ import { act, Btn, ErrorNote, PageHeader, TabBar } from '../components/kit';
 import { TrackerButton } from '../components/players';
 import { DeltaBars, HBars, LineChart } from '../components/charts';
 import { LifetimeSection, MatchLine, MmrChip } from '../components/lifetime';
-import { PlayerName } from '../components/PlayerName';
+import { CopyLobby, PlayerName } from '../components/PlayerName';
+import { EncounterChip } from '../components/Encounter';
 
 const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onClose: () => void; onOpenProfile: (puuid: string) => void }) {
+function Scoreboard({ matchId, myPuuid, onClose, onOpenProfile }: { matchId: string; myPuuid?: string; onClose: () => void; onOpenProfile: (puuid: string) => void }) {
   const [d, setD] = useState<MatchDetailView | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [peaks, setPeaks] = useState<Record<string, MmrState | undefined> | null>(null);
@@ -47,7 +48,10 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
               {d?.mapName ?? '…'} {d && <span className="num ml-2 text-muted">{d.teams.map((t) => t.roundsWon).join(' – ')}</span>}
             </div>
           </div>
-          <Btn onClick={onClose}>Close</Btn>
+          <div className="flex gap-2">
+            {d && <CopyLobby players={d.rows.map((r) => ({ name: r.name, tag: r.tag, team: r.teamId }))} />}
+            <Btn onClick={onClose}>Close</Btn>
+          </div>
         </div>
         {err && <div className="p-5"><ErrorNote>{err}</ErrorNote></div>}
         {!d && !err && <Skeleton className="m-5 h-64" />}
@@ -74,6 +78,7 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
                           {r.agentIcon ? <Img src={r.agentIcon} alt={r.agentName ?? ''} className="h-7 w-7 rounded-sm" /> : <span className="block h-7 w-7 rounded-sm bg-white/5" />}
                         </button>
                         <PlayerName name={r.name} tag={r.tag} className="min-w-0 truncate" fallback={<span className="text-faint">Unknown player</span>} />
+                        <EncounterChip puuid={r.puuid} skip={r.puuid === myPuuid} />
                         <button className="press ml-1 shrink-0 text-faint hover:text-ink" title="Open profile" aria-label="Open profile" onClick={() => onOpenProfile(r.puuid)}>
                           <ArrowRight size={12} weight="bold" />
                         </button>
@@ -111,12 +116,88 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
   );
 }
 
+/** Today's ranked session and the climb to the next rank, from Riot's competitive updates. */
+function SessionStrip({ profile }: { profile: ProfileView }) {
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const today = profile.rrHistory.filter((h) => h.t >= midnight.getTime());
+  const net = today.reduce((a, h) => a + h.delta, 0);
+  // RR sign as the result: competitive updates carry no W/L, and a draw is 0 RR.
+  const w = today.filter((h) => h.delta > 0).length;
+  const l = today.filter((h) => h.delta < 0).length;
+  const gains = profile.rrHistory.filter((h) => h.delta > 0).map((h) => h.delta);
+  const losses = profile.rrHistory.filter((h) => h.delta < 0).map((h) => -h.delta);
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const avgWin = avg(gains);
+  const avgLoss = avg(losses);
+  const tier = profile.rank?.tier ?? 0;
+  const toNext = tier >= 3 && tier < 24 ? Math.max(0, 100 - (profile.rr ?? 0)) : null;
+  const winsNeeded = toNext != null && avgWin > 0 ? Math.ceil(toNext / avgWin) : null;
+  // Net games needed at your recent win rate: each game is worth p·win − (1−p)·loss.
+  const decided = profile.rrHistory.filter((h) => h.delta !== 0);
+  const p = decided.length ? decided.filter((h) => h.delta > 0).length / decided.length : 0;
+  const perGame = p * avgWin - (1 - p) * avgLoss;
+  const gamesNeeded = toNext != null && perGame > 0.5 ? Math.ceil(toNext / perGame) : null;
+  if (!today.length && toNext == null) return null;
+  const Item = ({ k, v, sub, tone }: { k: string; v: React.ReactNode; sub?: string; tone?: string }) => (
+    <div className="min-w-0">
+      <div className="text-2xs text-faint">{k}</div>
+      <div className={cx('t-num text-lg leading-tight', tone ?? 'text-ink')}>{v}</div>
+      {sub && <div className="truncate text-2xs text-muted">{sub}</div>}
+    </div>
+  );
+  return (
+    <Panel className="grid grid-cols-4 gap-6 px-6 py-4">
+      <Item k="Today (ranked)" v={today.length ? `${net > 0 ? '+' : ''}${net} RR` : '—'} tone={net > 0 ? 'text-win' : net < 0 ? 'text-loss' : undefined} sub={today.length ? `${w}W ${l}L · ${today.length} game${today.length === 1 ? '' : 's'}` : 'No ranked games yet today'} />
+      <Item k="To next rank" v={toNext != null ? `${toNext} RR` : tier >= 24 ? 'Immortal+' : '—'} sub={tier >= 24 ? 'Leaderboard RR has no next rank' : profile.rank?.name} />
+      <Item k="Wins needed" v={winsNeeded != null ? `~${winsNeeded}` : '—'} sub={avgWin ? `at your +${Math.round(avgWin)} average win` : undefined} />
+      <Item k="Games at your pace" v={gamesNeeded != null ? `~${gamesNeeded}` : perGame <= 0.5 && decided.length ? 'Not climbing' : '—'} sub={decided.length ? `${Math.round(p * 100)}% wins · −${Math.round(avgLoss)} per loss` : undefined} />
+    </Panel>
+  );
+}
+
+function RecentPlayers({ onOpen }: { onOpen: (puuid: string) => void }) {
+  const [list, setList] = useState<Encounter[] | null>(null);
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    void act<Encounter[]>('encounters:recent').then((r) => setList(r.ok ? r.data : []));
+  }, []);
+  if (!list) return <Skeleton className="h-64" />;
+  const shown = list.filter((e) => !q || `${e.name}#${e.tag}`.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <Panel>
+      <div className="flex items-center justify-between gap-4 border-b border-line px-5 py-3">
+        <span className="label">Players you’ve met in 2+ matches · {list.length}</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter" className="field h-8 w-44" />
+      </div>
+      {shown.map((e) => (
+        <div key={e.puuid} className="flex items-center gap-3 border-b border-line px-5 py-2.5 last:border-b-0">
+          <Img src={e.agentIcon} alt="" className="h-8 w-8 rounded-lg bg-white/5" />
+          <div className="min-w-0 flex-1">
+            <PlayerName name={e.name} tag={e.tag} className="truncate text-sm" fallback={<span className="text-faint">Unknown player</span>} />
+            <div className="text-xs text-muted">
+              {e.with ? `${e.with}× teammates (${e.winsWith}–${e.with - e.winsWith})` : ''}
+              {e.with && e.against ? ' · ' : ''}
+              {e.against ? `${e.against}× opponents (${e.winsAgainst}–${e.against - e.winsAgainst})` : ''}
+            </div>
+          </div>
+          <span className="text-xs text-faint">{e.mapName ? `${e.mapName} · ` : ''}{when(e.lastAt)}</span>
+          <button className="press rounded-full p-1.5 text-faint hover:bg-white/[0.08] hover:text-ink" title="Open profile" aria-label="Open profile" onClick={() => onOpen(e.puuid)}>
+            <ArrowRight size={14} weight="bold" />
+          </button>
+        </div>
+      ))}
+      {!shown.length && <div className="px-5 py-6 text-sm text-muted">{list.length ? 'Nobody matches.' : 'No repeat players in your cached matches yet.'}</div>}
+    </Panel>
+  );
+}
+
 export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue, initialTab }: { connected: boolean; myPuuid?: string; initialQuery?: string; historyQueue: string; initialTab?: 'history' | 'stats' | 'lifetime' }) {
   const [query, setQuery] = useState(initialQuery && !/^[0-9a-f-]{36}$/i.test(initialQuery) ? initialQuery : '');
   const [profile, setProfile] = useState<ProfileView | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState<'history' | 'stats' | 'lifetime'>(initialTab ?? 'history');
+  const [tab, setTab] = useState<'history' | 'stats' | 'lifetime' | 'people'>(initialTab ?? 'history');
   useEffect(() => {
     if (initialTab) setTab(initialTab);
   }, [initialTab, initialQuery]);
@@ -135,7 +216,8 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue,
     } else setErr(r.error);
   };
   useEffect(() => {
-    if (connected && myPuuid && !profile && !initialQuery) void load(myPuuid);
+    // First load, or the Riot Client switched accounts while your own profile was showing.
+    if (connected && myPuuid && (!profile || (profile.isMe && profile.puuid !== myPuuid)) && !initialQuery) void load(myPuuid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, myPuuid]);
   useEffect(() => {
@@ -205,6 +287,8 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue,
             </div>
           </Panel>
 
+          <SessionStrip profile={profile} />
+
           <div className="grid grid-cols-2 gap-5">
             <Panel className="p-5">
               <div className="label mb-2">Rank rating over time</div>
@@ -221,9 +305,11 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue,
             </Panel>
           </div>
 
-          <TabBar tabs={[['history', `Match history · ${profile.matches.length}`], ['stats', 'Analysis'], ['lifetime', 'Lifetime']]} value={tab} onChange={setTab} />
+          <TabBar tabs={[['history', `Match history · ${profile.matches.length}`], ['stats', 'Analysis'], ['lifetime', 'Lifetime'], ...(profile.isMe ? [['people', 'Recent players'] as ['people', string]] : [])]} value={tab} onChange={setTab} />
 
-          {tab === 'lifetime' ? (
+          {tab === 'people' ? (
+            <RecentPlayers onOpen={(p) => void load(p)} />
+          ) : tab === 'lifetime' ? (
             <LifetimeSection puuid={profile.puuid} onOpenMatch={setOpenMatch} />
           ) : (
           <>
@@ -289,6 +375,7 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue,
       {openMatch && (
         <Scoreboard
           matchId={openMatch}
+          myPuuid={myPuuid}
           onClose={() => setOpenMatch(null)}
           onOpenProfile={(p) => {
             setOpenMatch(null);

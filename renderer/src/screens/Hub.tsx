@@ -5,7 +5,7 @@ import { img } from '../lib/media';
 import { Img, Panel, RankBadge, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, Note, PageHeader, TabBar, useRpc } from '../components/kit';
 import { useInterval } from '../lib/store';
-import { ArrowRight, Desktop, DeviceMobile, GameController, type IconProps } from '../lib/icons';
+import { ArrowRight, Desktop, DeviceMobile, GameController, Star, type IconProps } from '../lib/icons';
 import { PlayerName } from '../components/PlayerName';
 
 type Tab = 'friends' | 'leaderboard' | 'agents' | 'maps' | 'weapons';
@@ -22,7 +22,7 @@ const PLATFORM_GROUPS: { key: FriendView['platform']; label: string; hint: strin
   { key: 'offline', label: 'Offline', hint: '', Icon: Desktop },
 ];
 
-function FriendRow({ f, onProfile }: { f: FriendView; onProfile: (q: string) => void }) {
+function FriendRow({ f, onProfile, watched, onWatch }: { f: FriendView; onProfile: (q: string) => void; watched: boolean; onWatch: (on: boolean) => void }) {
   const Icon = PLATFORM_GROUPS.find((g) => g.key === f.platform)?.Icon ?? Desktop;
   const dot = !f.online ? 'bg-faint' : f.platform === 'mobile' ? 'bg-[#5ab0ff]' : f.state === 'away' ? 'bg-warn' : f.platform === 'valorant' ? 'bg-win' : 'bg-white/60';
   return (
@@ -40,6 +40,14 @@ function FriendRow({ f, onProfile }: { f: FriendView; onProfile: (q: string) => 
       </div>
       {f.rank && <RankBadge rank={f.rank} compact />}
       {f.level && <span className="num w-12 text-right text-xs text-muted">Lv {f.level}</span>}
+      <button
+        className={cx('press shrink-0 rounded-full p-1.5 hover:bg-white/[0.08]', watched ? 'text-warn' : 'text-faint hover:text-ink')}
+        title={watched ? 'Watching: you get a notification when they come online or finish a match' : 'Watch: notify me when they come online or finish a match'}
+        aria-pressed={watched}
+        onClick={() => onWatch(!watched)}
+      >
+        <Star size={14} weight={watched ? 'fill' : 'regular'} />
+      </button>
       <button className="press shrink-0 rounded-full p-1.5 text-faint hover:bg-white/[0.08] hover:text-ink" title="Open profile" aria-label={`Open ${f.name}'s profile`} onClick={() => onProfile(`${f.name}#${f.tag}`)}>
         <ArrowRight size={14} weight="bold" />
       </button>
@@ -52,13 +60,26 @@ function Friends({ riotClient, onProfile }: { riotClient: boolean; onProfile: (q
   const [nt, setNt] = useState('');
   const [err, setErr] = useState<string | null>(null);
   useInterval(() => riotClient && void reload(), 15000, [riotClient, reload]);
+  const [q, setQ] = useState('');
+  const [watch, setWatch] = useState<string[]>([]);
+  useEffect(() => {
+    void act<string[]>('hub:watchList').then((r) => r.ok && setWatch(r.data));
+  }, []);
+  const toggleWatch = async (p: string, on: boolean) => {
+    const r = await act<string[]>('hub:watch', p, on);
+    if (r.ok) setWatch(r.data);
+  };
   if (!riotClient) return <Note>Friends and presence come from the Riot Client’s local chat API. Start the Riot Client to see them (a web sign-in can’t reach chat).</Note>;
-  const groups = PLATFORM_GROUPS.map((g) => ({ ...g, list: (data?.friends ?? []).filter((f) => (f.platform ?? (f.online ? 'client' : 'offline')) === g.key) }));
+  const ql = q.trim().toLowerCase();
+  const match = (f: FriendView) => !ql || `${f.name}#${f.tag} ${f.note ?? ''}`.toLowerCase().includes(ql);
+  // Watched friends first inside each group.
+  const groups = PLATFORM_GROUPS.map((g) => ({ ...g, list: (data?.friends ?? []).filter((f) => (f.platform ?? (f.online ? 'client' : 'offline')) === g.key && match(f)).sort((a, b) => Number(watch.includes(b.puuid)) - Number(watch.includes(a.puuid))) }));
   const onlineCount = (data?.friends ?? []).filter((f) => f.online).length;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_clamp(280px,26vw,340px)] gap-4 xl:gap-5">
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search friends" aria-label="Search friends" className="field mr-2 h-8 w-48" />
           <span className="num text-ink">{onlineCount} online</span>
           {groups.slice(0, 3).map((g) => (
             <span key={g.key} className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1" title={g.hint}>
@@ -78,7 +99,7 @@ function Friends({ riotClient, onProfile }: { riotClient: boolean; onProfile: (q
                   {g.hint && <span className="text-2xs text-faint">{g.hint}</span>}
                 </div>
                 {g.list.map((f) => (
-                  <FriendRow key={f.puuid} f={f} onProfile={onProfile} />
+                  <FriendRow key={f.puuid} f={f} onProfile={onProfile} watched={watch.includes(f.puuid)} onWatch={(on) => void toggleWatch(f.puuid, on)} />
                 ))}
               </Panel>
             ))}
@@ -130,7 +151,9 @@ function Leaderboard({ connected }: { connected: boolean }) {
   const acts = useRpc<{ id: string; name: string }[]>('hub:acts', []);
   const [season, setSeason] = useState<string | undefined>();
   const [start, setStart] = useState(0);
-  const lb = useRpc<LeaderboardView>('hub:leaderboard', [season, start], connected);
+  const [q, setQ] = useState('');
+  const [search, setSearch] = useState('');
+  const lb = useRpc<LeaderboardView>('hub:leaderboard', [season, start, search], connected);
   if (!connected) return <ErrorNote>Needs tokens: start the Riot Client or sign in.</ErrorNote>;
   const v = lb.data;
   return (
@@ -145,6 +168,18 @@ function Leaderboard({ connected }: { connected: boolean }) {
           </select>
         </label>
         <span className="pb-1.5 text-sm text-muted">Region {v?.region?.toUpperCase() ?? '–'}{v?.total ? ` · ${v.total.toLocaleString()} ranked players` : ''}</span>
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSearch(q.trim());
+            setStart(0);
+          }}
+        >
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a player" className="field w-44" />
+          <Btn type="submit">Search</Btn>
+          {search && <Btn tone="ghost" onClick={() => (setQ(''), setSearch(''))}>Clear</Btn>}
+        </form>
         <div className="ml-auto flex gap-2">
           <Btn disabled={start === 0} onClick={() => setStart(Math.max(0, start - 50))}>Prev</Btn>
           <Btn onClick={() => setStart(start + 50)}>Next</Btn>
