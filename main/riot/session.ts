@@ -62,6 +62,10 @@ export interface SessionOptions {
   loadCache?: () => Promise<ConnectionCache>;
   saveCache?: (c: ConnectionCache) => Promise<void>;
   platformType?: () => string;
+  /** 'pinned': use the saved sign-in even while the Riot Client has tokens (Settings > Accounts). */
+  accountMode?: () => 'follow' | 'pinned';
+  /** Tests: how often the Riot Client's account is re-read (default ACCOUNT_CHECK_MS). */
+  accountCheckMs?: number;
 }
 
 interface Auth {
@@ -117,6 +121,11 @@ export class RiotSession {
   /** Lockfile of the running Riot Client (for the local WebSocket), or null. */
   get lockInfo(): { protocol: string; port: number; password: string } | null {
     return this.lock ? { protocol: this.lock.protocol, port: this.lock.port, password: this.lock.password } : null;
+  }
+
+  /** A Riot Client lockfile was found (process running), answering or not. */
+  get hasLockfile(): boolean {
+    return !!this.lock;
   }
 
   get localAvailable(): boolean {
@@ -185,7 +194,7 @@ export class RiotSession {
       this.lastSessions = sessions.json;
       this.valorantRunning = hasValorantSession(sessions.json);
       if (!this.localAuth || Date.now() - this.localAuth.at > TOKEN_TTL_MS) await this.refreshLocalAuth();
-      else if (Date.now() - this.accountCheckedAt > ACCOUNT_CHECK_MS) await this.refreshLocalAuth(true);
+      else if (Date.now() - this.accountCheckedAt > (this.opts.accountCheckMs ?? ACCOUNT_CHECK_MS)) await this.refreshLocalAuth(true);
       this.riotClient = this.localAuth ? 'up' : 'down';
     } catch (e) {
       if (!(e instanceof WaitingError)) log.warn('Riot Client probe failed', e);
@@ -230,15 +239,37 @@ export class RiotSession {
     await this.pickTokens();
   }
 
+  /**
+   * Bumped whenever the account SexyVal acts for changes (switch, sign-out, A→B→A). Work that started under
+   * one generation must not write its result after the account changed: owners compare before committing.
+   */
+  generation = 0;
+
+  /** True while `gen` (captured when work started) is still the current account. */
+  isCurrent(gen: number): boolean {
+    return gen === this.generation;
+  }
+
   private async pickTokens(): Promise<void> {
+    const before = this.active?.subject ?? null;
+    await this.pickTokensInner();
+    const after = this.active?.subject ?? null;
+    if (before !== after) {
+      this.generation++;
+      log.info(`account generation ${this.generation}${after ? '' : ' (signed out)'}`);
+    }
+  }
+
+  private async pickTokensInner(): Promise<void> {
     let signed: Awaited<ReturnType<SignInProvider['getTokens']>> = null;
-    if (!this.localAuth && this.opts.signin?.hasAccount()) {
+    const pinned = this.opts.accountMode?.() === 'pinned';
+    if ((!this.localAuth || pinned) && this.opts.signin?.hasAccount()) {
       signed = await this.opts.signin.getTokens().catch((e) => {
         log.warn('signed-in session unavailable', e);
         return null;
       });
     }
-    this.tokenSource = pickTokenSource({ riotClientTokens: !!this.localAuth, signedInTokens: !!signed });
+    this.tokenSource = pinned && signed ? 'signin' : pickTokenSource({ riotClientTokens: !!this.localAuth, signedInTokens: !!signed });
     if (this.tokenSource === 'riot-client') {
       this.active = this.localAuth;
       this.accountLabel = null;

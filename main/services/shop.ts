@@ -224,6 +224,9 @@ export class ShopService {
       return this.view;
     }
     const prevVp = this.view.wallet?.vp;
+    const gen = this.api.session.generation;
+    // A result for another account than the one now shown is never committed (switch mid-request).
+    const stale = () => !this.api.session.isCurrent(gen) || (!!this.puuid && this.puuid !== puuid);
     this.view = { ...this.view, status: 'loading', error: undefined };
     this.hooks.onChange(this.view);
     try {
@@ -239,6 +242,10 @@ export class ShopService {
         const n = await this.bundleName(b.id);
         b.name = n.name;
         b.icon = n.icon;
+      }
+      if (stale()) {
+        log.info('store: account changed during refresh, discarding');
+        return this.view;
       }
       const bal = wallet?.json?.Balances ?? null;
       this.view = {
@@ -256,6 +263,7 @@ export class ShopService {
       this.schedule();
       this.hooks.afterRefresh(prevVp != null && this.view.wallet?.vp !== prevVp);
     } catch (e) {
+      if (stale()) return this.view;
       const msg = e instanceof HttpError ? `Shop failed: HTTP ${e.status} on ${e.path}. ${e.body.slice(0, 160)}` : `Shop failed: ${(e as Error).message}`;
       // Keep the last good items on screen; never a blank page.
       this.view = { ...this.view, status: 'error', error: `${msg} (raw response in Settings > Debug)` };

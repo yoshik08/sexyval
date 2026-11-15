@@ -349,7 +349,7 @@ function Accounts({ state }: { state: AppState | null }) {
         <span className="text-ink">This is an unofficial login flow.</span> “Sign in with Riot” opens Riot’s own login page and SexyVal never sees your password; it reads the token from the redirect. Riot can change the flow or show captchas at any time. Cookies stay in a private per-account browser partition and tokens are kept in memory only.
       </Note>
       <Group title="Token source">
-        <Row title={c?.tokenSource === 'riot-client' ? 'Riot Client' : c?.tokenSource === 'signin' ? 'Signed-in session' : 'None'} hint={c?.tokenSource === 'riot-client' ? 'Preferred while the Riot Client runs.' : c?.tokenSource === 'signin' ? c.account : 'Start the Riot Client or sign in.'}>
+        <Row title={c?.tokenSource === 'riot-client' ? 'Riot Client' : c?.tokenSource === 'signin' ? 'Signed-in session' : 'None'} hint={c?.tokenSource === 'riot-client' ? 'Preferred while the Riot Client runs (unless you pin an account below).' : c?.tokenSource === 'signin' ? c.account : 'Start the Riot Client or sign in.'}>
           <Btn
             tone="primary"
             disabled={busy}
@@ -370,15 +370,16 @@ function Accounts({ state }: { state: AppState | null }) {
         <Panel className="divide-y divide-white/[0.06]">
           {list.map((a) => (
             <div key={a.id} className="flex items-center gap-4 px-6 py-4">
-              <span className={cx('h-2.5 w-2.5 rounded-full', a.status === 'ok' ? 'bg-win' : a.status === 'expired' ? 'bg-loss' : a.status === 'error' ? 'bg-warn' : 'bg-faint')} />
+              <span className={cx('h-2.5 w-2.5 rounded-full', a.status === 'ok' ? 'bg-win' : a.status === 'expired' ? 'bg-loss' : a.status === 'error' || a.status === 'offline' ? 'bg-warn' : 'bg-faint', a.status === 'recovering' && 'pulse-dot')} />
               <div className="min-w-0 flex-1">
                 <div className="text-base">
                   <PlayerName name={a.name} tag={a.tag} fallback="Account" />
                   {a.active && <span className="ml-2 rounded-full bg-white/[0.12] px-2 py-0.5 text-2xs font-semibold text-ink">Active</span>}
                 </div>
                 <div className="text-sm text-muted">
-                  {a.region?.toUpperCase() ?? 'Region not known yet'} · {a.status}
-                  {a.error ? ` · ${a.error}` : ''}
+                  {a.region?.toUpperCase() ?? 'Region not known yet'} · {ACCOUNT_STATE[a.status]}
+                  {a.status === 'offline' && a.retryAt ? ` · next try ${new Date(a.retryAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : ''}
+                  {a.error && a.status !== 'ok' ? ` · ${a.error}` : ''}
                 </div>
               </div>
               {!a.active && (
@@ -386,20 +387,53 @@ function Accounts({ state }: { state: AppState | null }) {
                   Switch
                 </Btn>
               )}
+              {(a.status === 'offline' || a.status === 'error') && (
+                <Btn size="sm" onClick={() => void api.rpc('accounts:retry', a.id)}>
+                  Retry now
+                </Btn>
+              )}
               {a.status === 'expired' && (
                 <Btn size="sm" tone="primary" onClick={() => void api.rpc('accounts:signInAgain', a.id)}>
                   Sign in again
                 </Btn>
               )}
-              <Btn size="sm" tone="danger" onClick={() => void api.rpc('accounts:remove', a.id)}>
+              <Btn size="sm" tone="danger" onClick={() => window.confirm(`Remove ${a.name ?? 'this account'}? Its saved login is deleted; you can sign in again later.`) && void api.rpc('accounts:remove', a.id)}>
                 Remove
               </Btn>
             </div>
           ))}
           {!list.length && <div className="px-6 py-5 text-sm text-muted">No signed-in accounts. The Riot Client is used while it is running.</div>}
         </Panel>
-        <p className="mt-2.5 px-1 text-xs text-faint">Riot Client tokens win while it runs; otherwise the active signed-in account is used. Sessions refresh silently about every 50 minutes.</p>
+        <AccountMode />
+        <p className="mt-2.5 px-1 text-xs text-faint">Sessions refresh silently about every 50 minutes. If Riot can’t be reached (no internet, blocked network) the account is kept and retried; only Riot’s own login page asks you to sign in again, and nothing you saved is lost.</p>
       </section>
+    </div>
+  );
+}
+
+const ACCOUNT_STATE: Record<AccountInfo['status'], string> = {
+  ok: 'Signed in',
+  pending: 'Ready (used when the Riot Client is closed)',
+  recovering: 'Reconnecting…',
+  offline: 'Riot unreachable, kept',
+  expired: 'Needs a new login',
+  error: 'Riot returned an error',
+};
+
+function AccountMode() {
+  const s = useSettings();
+  if (!s) return null;
+  return (
+    <div className="mt-4 flex items-center justify-between gap-6 rounded-[20px] bg-surface px-6 py-4 ring-1 ring-inset ring-white/[0.07]">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-ink">Which account SexyVal shows</div>
+        <div className="text-xs text-muted">
+          {s.accountMode === 'pinned'
+            ? 'Pinned: the Active saved account above, even while the Riot Client runs another one. Live and friends still follow the Riot Client.'
+            : 'Follow: whoever is signed in to the Riot Client (switches are picked up within seconds). The Active saved account is used when the client is closed.'}
+        </div>
+      </div>
+      <Segmented<'follow' | 'pinned'> size="sm" value={s.accountMode ?? 'follow'} onChange={(v) => void saveSettings({ accountMode: v })} options={[['follow', 'Follow client'], ['pinned', 'Pinned']]} />
     </div>
   );
 }

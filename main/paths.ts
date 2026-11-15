@@ -14,6 +14,30 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
   }
 }
 
+/**
+ * Like readJson, but tells "file missing" apart from "file there but unreadable" (locked by antivirus /
+ * OneDrive, half-written, corrupt). Callers that must never replace real data with a default use this.
+ */
+export async function readJsonStrict<T>(file: string, tries = 3): Promise<{ state: 'ok'; data: T } | { state: 'missing' } | { state: 'unreadable'; error: string }> {
+  let last = '';
+  for (let i = 0; i < tries; i++) {
+    try {
+      return { state: 'ok', data: JSON.parse(await fs.readFile(file, 'utf8')) as T };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
+      last = (e as Error).message;
+      await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+    }
+  }
+  return { state: 'unreadable', error: last };
+}
+
+/** Keeps the previous version as <file>.bak before each write (one generation). */
+export async function writeJsonWithBackup(file: string, data: unknown): Promise<void> {
+  await fs.copyFile(file, `${file}.bak`).catch(() => undefined);
+  await writeJson(file, data);
+}
+
 let tmpSeq = 0;
 const queues = new Map<string, Promise<void>>();
 

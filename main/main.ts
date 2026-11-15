@@ -48,6 +48,7 @@ import { ReplayService, demosDir } from './services/replays';
 import { SpendingService } from './services/spending';
 import { EncounterService } from './services/encounters';
 import { makeBackup, restoreBackup } from './services/backup';
+import { computeHealth, type HealthReport } from '../shared/health';
 
 const MOCK = process.env.MOCK === '1';
 const SHOTS = process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS;
@@ -97,6 +98,8 @@ function setQuiet(on: boolean): void {
 let resume: ResumeStore | null = null;
 let resumed: ResumeFile | null = null;
 let updater: AppUpdater | null = null;
+let healthNow: () => HealthReport = () => ({ overall: 'connecting', summary: 'Starting', items: [] });
+let pushHealth: () => void = () => undefined;
 
 /** Side calibration was removed (the rule is hardcoded now); delete what it stored. Nothing to do once gone. */
 async function removeOldCalibrationData(): Promise<void> {
@@ -266,10 +269,13 @@ async function startServices(): Promise<void> {
   accounts = new AccountManager(
     dataDir('accounts.json'),
     authUrls,
-    () => send('accounts', accounts?.list()),
+    () => {
+      send('accounts', accounts?.list());
+      pushHealth();
+    },
     (label) => {
       send('alert', { kind: 'session-expired', label });
-      notify('Session expired', `${label}: sign in again or remove the account`);
+      notify('Sign-in needed', `${label}: Riot asked for a new login. Your account and its data are kept.`);
     },
   );
   await accounts.load();
@@ -283,6 +289,7 @@ async function startServices(): Promise<void> {
     overrideShared,
     onRaw,
     signin: accounts,
+    accountMode: () => getSettings().accountMode,
     loadCache: () => readJson<ConnectionCache>(cacheFile, {}),
     saveCache: (c) => writeJson(cacheFile, c),
     platformType: () => getSettings().platformType,
@@ -397,6 +404,7 @@ async function startServices(): Promise<void> {
     shop,
     emit: (s: AppState) => {
       send('state', s);
+      pushHealth();
       overlay.update(s);
       onPhase(s);
       onVersion(s.conn.version);
@@ -415,6 +423,30 @@ async function startServices(): Promise<void> {
     },
   });
   emitLater = () => loop?.requestEmit();
+  // Connection health (status pill → details): recomputed on every state emit, sent only when it changed.
+  let lastHealth = '';
+  healthNow = (): HealthReport => {
+    const c = loop?.state.conn;
+    return computeHealth({
+      riotClient: session.riotClient,
+      lockfile: session.hasLockfile,
+      tokenSource: session.tokenSource,
+      connStatus: c?.status ?? 'connecting',
+      connMessage: c?.message,
+      events: events?.state ?? 'off',
+      accounts: (accounts?.list() ?? []).map((a) => ({ label: `${a.name ?? '?'}#${a.tag ?? '?'}`, status: a.status, retryAt: a.retryAt })),
+      accountsReadOnly: accounts?.storageReadOnly ?? false,
+      pinned: getSettings().accountMode === 'pinned' && session.tokenSource === 'signin',
+    });
+  };
+  pushHealth = () => {
+    const h = healthNow();
+    const key = JSON.stringify(h);
+    if (key !== lastHealth) {
+      lastHealth = key;
+      send('health', h);
+    }
+  };
   loop.start();
   // Instant phase changes from the Riot Client's own event socket; polling stays as the fallback.
   events = new RiotEvents(
@@ -639,6 +671,16 @@ async function startServices(): Promise<void> {
         return null;
       }
     },
+    'health:get': () => healthNow(),
+    // Manual reconnect: forget the Riot Client handshake and event socket, then poll at once.
+    'health:reconnect': () => {
+      session.reset();
+      events?.stop();
+      events?.start();
+      for (const a of accounts?.list() ?? []) if (a.status === 'offline' || a.status === 'error') void accounts?.retry(a.id);
+      loop?.pollNow();
+    },
+    'accounts:retry': (id: unknown) => accounts?.retry(str(id, 32)).then((ok) => (loop?.pollNow(), ok)),
     'replays:list': () => replays.list(),
     'replays:get': (id: unknown, force: unknown) => replays.get(str(id, 64), force === true),
     'replays:reveal': async (id: unknown) => {
@@ -697,7 +739,7 @@ async function startServices(): Promise<void> {
       applyAppIcon(win, s.appIcon, iconPath());
       tray?.setImage(nativeImage.createFromPath(iconPath()).resize({ width: 16, height: 16 }));
     }
-    if (s.platformType !== prev.platformType) loop?.pollNow();
+    if (s.platformType !== prev.platformType || s.accountMode !== prev.accountMode) loop?.pollNow();
     if (s.overlayEnabled !== prev.overlayEnabled) {
       updateTrayMenu();
       overlay.update(loop?.state);

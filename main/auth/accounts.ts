@@ -4,7 +4,7 @@ import { AUTHORIZE_URL, normalizeRegion, parseAuthRedirect, type AuthRedirect } 
 import type { AccountInfo } from '../../shared/features';
 import { httpRequest } from '../riot/http';
 import type { SignInProvider } from '../riot/session';
-import { readJson, writeJson } from '../paths';
+import { readJsonStrict, writeJsonWithBackup } from '../paths';
 import { log } from '../log';
 
 interface StoredAccount {
@@ -39,6 +39,27 @@ export const REAL_AUTH_URLS: AuthUrls = {
 };
 
 const REAUTH_EVERY = 50 * 60 * 1000;
+/** Offline retries: 30 s, 1, 2, 4, 8, 15 min, then every 15 min. Nothing ever deletes the account. */
+export function offlineBackoff(attempt: number): number {
+  return Math.min(15 * 60_000, 30_000 * 2 ** Math.max(0, attempt));
+}
+
+/**
+ * What a silent re-login attempt means. Only a page Riot actually served as its login form counts as
+ * "expired"; no answer, a failed load or a timeout on anything else is the network, never the account.
+ */
+export function classifyReauth(o: { redirect: boolean; lastUrl?: string; loadFailed: boolean; finishedLoads: number }): 'ok' | 'login-required' | 'network' {
+  if (o.redirect) return 'ok';
+  if (o.loadFailed || o.finishedLoads === 0) return 'network';
+  try {
+    const u = new URL(o.lastUrl ?? '');
+    if (/(^|\.)(authenticate|auth)\.riotgames\.com$/i.test(u.hostname) && !/\/authorize/i.test(u.pathname)) return 'login-required';
+    if (/login|signin/i.test(u.pathname)) return 'login-required';
+  } catch {
+    // no URL
+  }
+  return 'network';
+}
 
 /**
  * "Sign in with Riot": Riot's real login page in a BrowserWindow with a persistent partition.
@@ -53,6 +74,15 @@ export class AccountManager implements SignInProvider {
   private errors = new Map<string, string>();
   private reauthInflight = new Map<string, Promise<boolean>>();
   private timer: NodeJS.Timeout | null = null;
+  /** Offline backoff per account: attempts so far and when the next try is due. */
+  private offline = new Map<string, { attempts: number; next: number; timer?: NodeJS.Timeout }>();
+  /** accounts.json was there but unreadable at start: never overwrite it with what we have in memory. */
+  private readOnly = false;
+
+  /** accounts.json couldn't be read at start (health panel). */
+  get storageReadOnly(): boolean {
+    return this.readOnly;
+  }
 
   constructor(
     private readonly file: string,
@@ -62,7 +92,16 @@ export class AccountManager implements SignInProvider {
   ) {}
 
   async load(): Promise<void> {
-    const d = await readJson<{ accounts?: StoredAccount[]; activeId?: string | null }>(this.file, {});
+    type F = { accounts?: StoredAccount[]; activeId?: string | null };
+    let r = await readJsonStrict<F>(this.file);
+    if (r.state === 'unreadable') {
+      log.error(`accounts.json unreadable (${r.error}); trying the backup`);
+      const b = await readJsonStrict<F>(`${this.file}.bak`);
+      if (b.state === 'ok') r = b;
+      // Nothing readable: keep the file untouched so a later run can still read it.
+      else this.readOnly = true;
+    }
+    const d: F = r.state === 'ok' ? r.data : {};
     this.accounts = Array.isArray(d.accounts) ? d.accounts : [];
     this.activeId = d.activeId && this.accounts.some((a) => a.id === d.activeId) ? d.activeId : (this.accounts[0]?.id ?? null);
     for (const a of this.accounts) this.status.set(a.id, 'pending');
@@ -76,7 +115,11 @@ export class AccountManager implements SignInProvider {
   }
 
   private save(): void {
-    void writeJson(this.file, { accounts: this.accounts, activeId: this.activeId });
+    if (this.readOnly) {
+      log.warn('accounts.json was unreadable at start: not overwriting it');
+      return;
+    }
+    void writeJsonWithBackup(this.file, { accounts: this.accounts, activeId: this.activeId }).catch((e) => log.warn('saving accounts failed', e));
   }
 
   private partition(id: string): string {
@@ -91,6 +134,7 @@ export class AccountManager implements SignInProvider {
       puuid: a.puuid,
       region: a.region,
       status: this.status.get(a.id) ?? 'pending',
+      retryAt: this.status.get(a.id) === 'offline' ? this.offline.get(a.id)?.next : undefined,
       active: a.id === this.activeId,
       lastOkAt: a.lastOkAt,
       error: this.errors.get(a.id),
@@ -201,27 +245,56 @@ export class AccountManager implements SignInProvider {
     const p = (async () => {
       const acct = this.accounts.find((a) => a.id === id);
       if (!acct) return false;
+      const prevStatus = this.status.get(id);
+      if (prevStatus !== 'ok') {
+        this.status.set(id, 'recovering');
+        this.onChange();
+      }
       const win = new BrowserWindow({ show: false, webPreferences: { partition: this.partition(id), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+      const seen = { lastUrl: '', loadFailed: false, finishedLoads: 0 };
+      win.webContents.on('did-finish-load', () => {
+        seen.finishedLoads++;
+        seen.lastUrl = win.isDestroyed() ? seen.lastUrl : win.webContents.getURL();
+      });
+      // -3 is ERR_ABORTED: our own preventDefault on the redirect, not a failure.
+      win.webContents.on('did-fail-load', (_e, code, _d, url, mainFrame) => {
+        if (mainFrame && code !== -3) {
+          seen.loadFailed = true;
+          seen.lastUrl = url;
+        }
+      });
       const pending = this.capture(win, 20_000);
       void win.loadURL(this.urls.authorize).catch(() => undefined);
       const r = await pending;
-      if (!r) {
+      const outcome = classifyReauth({ redirect: !!r, ...seen });
+      if (outcome === 'login-required') {
+        this.clearOffline(id);
         this.tokens.delete(id);
         this.status.set(id, 'expired');
-        this.errors.set(id, 'Session expired: Riot asked to log in again');
+        this.errors.set(id, 'Riot asked to log in again. Your account and its data are kept.');
+        log.info(`account ${acct.name ?? '?'}: Riot needs a new sign-in`);
         this.onExpired(`${acct.name ?? 'Account'}#${acct.tag ?? ''}`);
         this.onChange();
         return false;
       }
+      if (outcome === 'network') {
+        this.markOffline(id, 'Riot can’t be reached right now (network). Retrying automatically.');
+        return false;
+      }
       try {
-        await this.complete(acct, r);
+        await this.complete(acct, r!);
+        this.clearOffline(id);
         this.save();
         this.onChange();
         return true;
       } catch (e) {
-        this.status.set(id, 'error');
-        this.errors.set(id, (e as Error).message);
-        this.onChange();
+        const msg = (e as Error).message;
+        // complete() talks to Riot too: an HTTP answer is an error, no answer is the network.
+        if (/HTTP \d/.test(msg)) {
+          this.status.set(id, 'error');
+          this.errors.set(id, msg);
+          this.onChange();
+        } else this.markOffline(id, `Riot can’t be reached right now (${msg}). Retrying automatically.`);
         return false;
       }
     })().finally(() => this.reauthInflight.delete(id));
@@ -229,12 +302,45 @@ export class AccountManager implements SignInProvider {
     return p;
   }
 
+  private markOffline(id: string, msg: string): void {
+    const o = this.offline.get(id) ?? { attempts: 0, next: 0 };
+    if (o.timer) clearTimeout(o.timer);
+    const wait = offlineBackoff(o.attempts);
+    o.attempts++;
+    o.next = Date.now() + wait;
+    o.timer = setTimeout(() => void this.silentReauth(id), wait);
+    o.timer.unref?.();
+    this.offline.set(id, o);
+    this.status.set(id, 'offline');
+    this.errors.set(id, msg);
+    log.warn(`account ${id}: offline, retry ${o.attempts} in ${Math.round(wait / 1000)} s`);
+    this.onChange();
+  }
+
+  private clearOffline(id: string): void {
+    const o = this.offline.get(id);
+    if (o?.timer) clearTimeout(o.timer);
+    this.offline.delete(id);
+  }
+
+  /** Manual "Retry now" (Settings > Accounts, connection panel): skips the backoff wait. */
+  retry(id: string): Promise<boolean> {
+    this.clearOffline(id);
+    return this.silentReauth(id);
+  }
+
+  /** Waiting out an offline backoff: don't open another hidden window on every token request. */
+  private waiting(id: string): boolean {
+    const o = this.offline.get(id);
+    return this.status.get(id) === 'offline' && !!o && Date.now() < o.next;
+  }
+
   async getTokens() {
     const id = this.activeId;
     if (!id) return null;
     let t = this.tokens.get(id);
     if (!t || t.expiresAt - Date.now() < 2 * 60 * 1000) {
-      if (this.status.get(id) === 'expired') return null;
+      if (this.status.get(id) === 'expired' || this.waiting(id)) return null;
       const ok = await this.silentReauth(id);
       if (!ok) return null;
       t = this.tokens.get(id);
@@ -255,7 +361,7 @@ export class AccountManager implements SignInProvider {
   async tokensFor(id: string): Promise<{ accessToken: string; entitlement: string } | null> {
     let t = this.tokens.get(id);
     if (!t || t.expiresAt - Date.now() < 2 * 60 * 1000) {
-      if (this.status.get(id) === 'expired') return null;
+      if (this.status.get(id) === 'expired' || this.waiting(id)) return null;
       if (!(await this.silentReauth(id))) return null;
       t = this.tokens.get(id);
     }
@@ -274,6 +380,7 @@ export class AccountManager implements SignInProvider {
   }
 
   async remove(id: string): Promise<void> {
+    this.clearOffline(id);
     this.accounts = this.accounts.filter((a) => a.id !== id);
     this.tokens.delete(id);
     this.status.delete(id);
@@ -294,6 +401,7 @@ export class AccountManager implements SignInProvider {
     const r = await pending;
     if (!r) return false;
     await this.complete(acct, r);
+    this.clearOffline(id);
     this.save();
     this.onChange();
     return true;

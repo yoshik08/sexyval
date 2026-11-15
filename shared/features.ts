@@ -182,7 +182,14 @@ export interface AccountInfo {
   tag?: string;
   puuid?: string;
   region?: string;
-  status: 'ok' | 'expired' | 'pending' | 'error';
+  /**
+   * ok: signed in. pending: not checked yet this run. recovering: silent re-login running.
+   * offline: Riot unreachable (network); kept, retried with backoff. expired: Riot showed its login page,
+   * a sign-in is needed (data is kept). error: Riot answered but something failed (retried).
+   */
+  status: 'ok' | 'expired' | 'pending' | 'error' | 'offline' | 'recovering';
+  /** offline: when the next automatic retry runs. */
+  retryAt?: number;
   active: boolean;
   lastOkAt?: number;
   error?: string;

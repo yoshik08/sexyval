@@ -29,6 +29,7 @@ const DEFAULTS: Settings = {
   autoUpdate: true,
   stretchEnabled: false,
   stretchRes: { w: 1440, h: 1080 },
+  accountMode: 'follow',
   stretchDevice: null,
   stretchNativeOnAltTab: false,
   boostEnabled: false,
@@ -109,6 +110,7 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   if (DENSITIES.includes(patch.liveDensity as any)) next.liveDensity = patch.liveDensity!;
   if (MMR_VIEWS.includes(patch.mmrView as any)) next.mmrView = patch.mmrView!;
   if (typeof patch.autoUpdate === 'boolean') next.autoUpdate = patch.autoUpdate;
+  if (patch.accountMode === 'follow' || patch.accountMode === 'pinned') next.accountMode = patch.accountMode;
   if (typeof patch.stretchEnabled === 'boolean') next.stretchEnabled = patch.stretchEnabled;
   if (typeof patch.stretchNativeOnAltTab === 'boolean') next.stretchNativeOnAltTab = patch.stretchNativeOnAltTab;
   const r = patch.stretchRes;

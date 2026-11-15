@@ -13,6 +13,7 @@ import { Btn } from './components/kit';
 import { WarpRow } from './components/warp';
 import { CommandPalette, type PaletteNav } from './components/CommandPalette';
 import { WhatsNew } from './components/WhatsNew';
+import { HealthPanel, useHealth } from './components/HealthPanel';
 import { LiveScreen } from './screens/Live';
 import { ShopScreen } from './screens/Shop';
 import { SettingsScreen } from './screens/Settings';
@@ -80,7 +81,7 @@ function Wordmark() {
   );
 }
 
-function ConnectionPill({ conn }: { conn?: Connection }) {
+function ConnectionPill({ conn, onClick, warn }: { conn?: Connection; onClick: () => void; warn?: string }) {
   const status = conn?.status ?? 'connecting';
   const dot = { waiting: 'bg-warn', connecting: 'bg-faint', connected: 'bg-win', error: 'bg-loss' }[status];
   const title = { waiting: 'Waiting for Riot', connecting: 'Connecting', connected: 'Connected', error: 'Connection problem' }[status];
@@ -94,24 +95,27 @@ function ConnectionPill({ conn }: { conn?: Connection }) {
         ? 'Mock data'
         : (conn?.message ?? 'Start the Riot Client');
   return (
-    <div className="rounded-2xl bg-white/[0.05] px-3.5 py-3" title={conn?.message}>
+    <button type="button" data-health-pill onClick={onClick} className="press w-full rounded-2xl bg-white/[0.05] px-3.5 py-3 text-left hover:bg-white/[0.08]" title="Connection health">
       <div className="flex items-center gap-2 text-sm font-medium text-ink">
         <span className={cx('h-2 w-2 rounded-full', dot, status === 'connected' && 'pulse-dot')} />
         {title}
         {conn?.tokenSource === 'signin' && conn.account && <span className="truncate text-xs font-normal text-muted">{conn.account}</span>}
       </div>
       <div className="mt-0.5 truncate pl-4 text-xs text-muted">{sub}</div>
-    </div>
+      {warn && <div className="mt-1 truncate pl-4 text-2xs text-warn">{warn}</div>}
+    </button>
   );
 }
 
-function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View) => void; conn?: Connection; onSearch: () => void }) {
+function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View, tab?: string) => void; conn?: Connection; onSearch: () => void }) {
   const wrap = useRef<HTMLDivElement>(null);
   const highlight = useRef<HTMLSpanElement>(null);
   // Mirrors `view` for the ResizeObserver/font callbacks below, so `measure` can stay referentially
   // stable instead of being torn down and recreated (with a spurious initial fire) on every tab switch.
   const viewRef = useRef(view);
   const [hl, setHl] = useState<{ y: number; h: number } | null>(null);
+  const health = useHealth();
+  const [healthOpen, setHealthOpen] = useState(false);
   const measure = useCallback((skipSlide: boolean) => {
     const el = wrap.current?.querySelector<HTMLElement>(`[data-nav="${viewRef.current}"]`);
     const next = el ? { y: el.offsetTop, h: el.offsetHeight } : null;
@@ -183,8 +187,9 @@ function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View) => vo
           {item(SETTINGS)}
         </div>
       </div>
-      <div className="mt-3">
-        <ConnectionPill conn={conn} />
+      <div className="relative mt-3">
+        {healthOpen && health && <HealthPanel h={health} onClose={() => setHealthOpen(false)} onSettings={() => (setHealthOpen(false), go('settings', 'accounts'))} />}
+        <ConnectionPill conn={conn} onClick={() => setHealthOpen((o) => !o)} warn={health && health.overall !== 'healthy' && conn?.status === 'connected' ? health.summary : undefined} />
       </div>
     </nav>
   );
@@ -348,22 +353,13 @@ export function App() {
       {alert && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70" role="alertdialog" aria-modal="true">
           <div className="sheet-in w-[440px] rounded-[28px] bg-[#101012] p-7 ring-1 ring-white/10">
-            <h2 className="t-head text-lg text-ink">Session expired</h2>
+            <h2 className="t-head text-lg text-ink">Sign-in needed</h2>
             <p className="text-pretty mt-2 text-sm text-muted">
-              <span className="text-ink">{alert.label}</span> needs to sign in again. Riot ended the saved session.
+              Riot asked <span className="text-ink">{alert.label}</span> to log in again. The account, its history and your settings are kept; only the login is needed.
             </p>
             <div className="mt-6 flex justify-end gap-2">
               <Btn tone="ghost" onClick={() => setAlert(null)}>
                 Later
-              </Btn>
-              <Btn
-                tone="danger"
-                onClick={() => {
-                  setAlert(null);
-                  go('settings', 'accounts');
-                }}
-              >
-                Remove account
               </Btn>
               <Btn
                 tone="primary"

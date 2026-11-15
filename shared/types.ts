@@ -246,6 +246,12 @@ export interface Settings {
   mmrView: 'auto' | 'solo' | 'team';
   /** Silent background updates (installed build only; the portable build can't self-update). */
   autoUpdate: boolean;
+  /**
+   * Which account SexyVal shows. follow: whoever is signed in to the Riot Client (a saved sign-in only when
+   * the client is closed). pinned: the active saved sign-in (Settings > Accounts) even while the Riot Client
+   * runs another account; Live and friends still come from the Riot Client.
+   */
+  accountMode: 'follow' | 'pinned';
   /** Stretched resolution while Valorant runs (Settings → Stretch). */
   stretchEnabled: boolean;
   stretchRes: { w: number; h: number };

@@ -28,7 +28,7 @@ export class SpendingService {
   private fx: FxRates = FALLBACK_FX;
   private fxAt = 0;
   private win: BrowserWindow | null = null;
-  private bp: { at: number; count?: number; error?: string } | null = null;
+  private bp: { at: number; puuid: string; count?: number; error?: string } | null = null;
 
   constructor(
     private readonly api: RiotApi,
@@ -68,15 +68,16 @@ export class SpendingService {
 
   /** Premium Battle Passes on the account: owned contract entitlements that are season (Battle Pass) contracts. */
   private async battlePasses(): Promise<{ count?: number; error?: string }> {
-    if (this.bp && Date.now() - this.bp.at < 10 * 60 * 1000) return this.bp;
-    if (!this.api.session.puuid) return { error: 'Needs the Riot Client or a sign-in' };
+    const puuid = this.api.session.puuid;
+    if (!puuid) return { error: 'Needs the Riot Client or a sign-in' };
+    if (this.bp && this.bp.puuid === puuid && Date.now() - this.bp.at < 10 * 60 * 1000) return this.bp;
     try {
       const res = await this.api.ownedItems(ITEM_TYPES.contracts);
       const ids = new Set(parseOwnedItems(res.json, ITEM_TYPES.contracts).items.map((i) => i.itemId));
       const count = this.catalog.browse.contracts.filter((c: any) => c.relationType === 'Season' && ids.has(c.id)).length;
-      this.bp = { at: Date.now(), count };
+      this.bp = { at: Date.now(), puuid, count };
     } catch (e) {
-      this.bp = { at: Date.now(), error: (e as Error).message };
+      this.bp = { at: Date.now(), puuid, error: (e as Error).message };
     }
     return this.bp;
   }

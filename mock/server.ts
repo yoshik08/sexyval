@@ -36,6 +36,8 @@ export interface MockHandle {
   base: string;
   lockfilePath: string;
   setPhase(p: MockPhase | 'auto', elapsedMs?: number): void;
+  /** Riot Client account switch: the local entitlements endpoint answers for this PUUID from now on (same lockfile). */
+  setSubject(puuid: string): void;
   phase(): MockPhase;
   events: MockEvents;
   /** Request paths served so far (tests: which endpoints were called, and that nothing else was). */
@@ -118,6 +120,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
   const owners = new Map<string, string>();
   const finished = new Map<string, any>();
   const requests: string[] = [];
+  let subject = ME;
   const mePersona = (opts.mmr ?? process.env.MOCK_MMR ?? 'above') as Persona;
   const acts = mockFixtures.progression.acts as string[];
   const actPair: [string, string] = [acts[acts.length - 2] ?? acts[0], mockFixtures.progression.act];
@@ -749,7 +752,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       if (req.headers.authorization !== expected) return json(res, 401, { errorCode: 'UNAUTHORIZED' });
       if (phase === 'offline') return json(res, 503, {});
       if (p === '/entitlements/v1/token') {
-        return json(res, 200, { accessToken: ACCESS, entitlements: [], issuer: 'https://entitlements.auth.riotgames.com', subject: ME, token: ENTITLEMENT });
+        return json(res, 200, { accessToken: ACCESS, entitlements: [], issuer: 'https://entitlements.auth.riotgames.com', subject, token: ENTITLEMENT });
       }
       return json(res, 200, {
         host_app: { exitCode: 0, launchConfiguration: { arguments: [], executable: '' }, productId: 'riot_client', version: '111.0.0' },
@@ -864,6 +867,9 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     port,
     base: `http://127.0.0.1:${port}`,
     lockfilePath,
+    setSubject(p: string) {
+      subject = p;
+    },
     setPhase(p, elapsedMs = 0) {
       if (p === 'auto') {
         auto = true;

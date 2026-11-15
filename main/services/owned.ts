@@ -56,6 +56,7 @@ export class OwnedService {
       this.signedOut();
       return this.state;
     }
+    const gen = this.api.session.generation;
     this.state = { ...this.state, status: 'loading' };
     this.onChange(this.state);
     const next = EMPTY();
@@ -86,6 +87,12 @@ export class OwnedService {
         }
       }),
     );
+    if (!this.api.session.isCurrent(gen)) {
+      // The account changed mid-refresh: these lists may mix two accounts. Drop them and read again.
+      log.info('owned items: account changed during refresh, discarding');
+      setTimeout(() => void this.refresh(), 0);
+      return this.state;
+    }
     next.fetchedAt = Date.now();
     next.status = failures === types.length ? 'error' : 'ready';
     if (failures) next.error = `${failures} item type(s) failed; see Debug`;
