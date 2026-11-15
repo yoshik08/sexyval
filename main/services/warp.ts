@@ -1,9 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
-import { createWriteStream, promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { cliMessage, IDLE_INSTALL, isDaemonDown, isRegistrationMissing, parseScQuery, parseWarpStatus, WARP_DEFAULT_CLI, WARP_DOWNLOAD_URL, WARP_SERVICE, type WarpInstall, type WarpPhase, type WarpStatus } from '../../shared/warp';
 import { log } from '../log';
 
@@ -34,7 +33,7 @@ export interface WarpDeps {
   exists?: (file: string) => Promise<boolean>;
   fetch?: typeof fetch;
   /** Checks the downloaded installer is signed by Cloudflare. Resolves to an error message, or null when it is. */
-  verify?: (file: string) => Promise<string | null>;
+  verify?: (file: string) => Promise<VerifyResult>;
   /** Runs the installer and resolves with its exit code once it closes (null: opened, can't wait). */
   launch?: (file: string) => Promise<number | null>;
   tempDir?: () => string;
@@ -48,17 +47,25 @@ const fileExists = (f: string) =>
     () => false,
   );
 
+export type VerifyResult = { ok: true } | { ok: false; message: string; /** The bytes are damaged (worth downloading again), not signed by someone else. */ corrupt: boolean };
+
+const DOWNLOAD_ATTEMPTS = 3;
+
 /** Authenticode check through PowerShell: Valid, and the signer is Cloudflare, Inc. */
-async function verifySignature(file: string, run: Runner): Promise<string | null> {
+async function verifySignature(file: string, run: Runner): Promise<VerifyResult> {
   const ps = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const script = `$s = Get-AuthenticodeSignature -LiteralPath $env:SEXYVAL_WARP_FILE; "$($s.Status)|$($s.SignerCertificate.Subject)"`;
   process.env.SEXYVAL_WARP_FILE = file;
   try {
     const r = await run(ps, ['-NoProfile', '-NonInteractive', '-Command', script], 30_000);
     const [status = '', subject = ''] = r.out.trim().split('|');
-    if (status !== 'Valid') return `The installer's signature didn't check out (${status || r.out.trim() || 'no answer'}). It was not opened.`;
-    if (!/O="?Cloudflare, Inc\./.test(subject)) return `The installer is signed by someone other than Cloudflare (${subject}). It was not opened.`;
-    return null;
+    if (status === 'Valid') {
+      if (/O="?Cloudflare, Inc\./.test(subject)) return { ok: true };
+      return { ok: false, corrupt: false, message: `The installer is signed by someone other than Cloudflare (${subject}).` };
+    }
+    // HashMismatch / NotSigned / UnknownError on a file Cloudflare signs means damaged bytes.
+    const corrupt = /^(HashMismatch|NotSigned|UnknownError)$/.test(status);
+    return { ok: false, corrupt, message: `Windows couldn't verify the installer's signature (${status || r.out.trim() || 'no answer'}).` };
   } finally {
     delete process.env.SEXYVAL_WARP_FILE;
   }
@@ -223,7 +230,6 @@ export class WarpService {
    */
   async installWarp(): Promise<WarpStatus | null> {
     if (this.install.stage === 'downloading' || this.install.stage === 'installing') return this.status;
-    const doFetch = this.deps.fetch ?? fetch;
     let dir: string | null = null;
     const setInstall = (i: WarpInstall) => {
       this.install = i;
@@ -231,33 +237,25 @@ export class WarpService {
     };
     setInstall({ stage: 'downloading', received: 0, total: 0 });
     try {
-      const res = await doFetch(WARP_DOWNLOAD_URL, { redirect: 'follow' });
-      const final = new URL(res.url || WARP_DOWNLOAD_URL);
-      // Cloudflare redirects to a versioned URL on the same host. Anything else is refused.
-      if (final.protocol !== 'https:' || final.hostname !== new URL(WARP_DOWNLOAD_URL).hostname) throw new Error(`The download was redirected to ${final.host}, not Cloudflare. Stopped.`);
-      if (!res.ok || !res.body) throw new Error(`Cloudflare's download server answered ${res.status} ${res.statusText}.`);
-      const total = Number(res.headers.get('content-length')) || 0;
       dir = await fs.mkdtemp(path.join(this.deps.tempDir?.() ?? os.tmpdir(), 'sexyval-warp-'));
-      const file = path.join(dir, fileNameFrom(res.headers.get('content-disposition')));
-      let received = 0;
-      let last = 0;
-      const body = Readable.fromWeb(res.body as any);
-      body.on('data', (chunk: Buffer) => {
-        received += chunk.length;
-        const now = Date.now();
-        if (now - last > 150) {
-          last = now;
-          setInstall({ stage: 'downloading', received, total });
-        }
-      });
-      await pipeline(body, createWriteStream(file));
-      if (total && received !== total) throw new Error(`The download stopped early (${received} of ${total} bytes).`);
-      setInstall({ stage: 'downloading', received, total: total || received });
+      const verify = this.deps.verify ?? ((f: string) => verifySignature(f, this.run));
+      // A download that arrives damaged (bad bytes on disk, Windows reports HashMismatch) is fetched
+      // again from scratch; a file signed by anyone but Cloudflare never is.
+      let file = '';
+      let size = 0;
+      for (let attempt = 1; ; attempt++) {
+        const got = await this.downloadOnce(dir, attempt, setInstall);
+        file = got.file;
+        size = got.size;
+        const v = got.intact ? await verify(file) : { ok: false as const, corrupt: true, message: 'The download was damaged on its way to disk.' };
+        if (v.ok) break;
+        log.warn(`WARP installer check failed (attempt ${attempt})`, v.message);
+        await fs.rm(file, { force: true }).catch(() => undefined);
+        if (!v.corrupt) throw new Error(`${v.message} It was not opened.`);
+        if (attempt >= DOWNLOAD_ATTEMPTS) throw new Error(`The installer kept arriving damaged (${attempt} tries; last: ${v.message}). It was not opened. Check your connection and try again.`);
+      }
 
-      const bad = await (this.deps.verify ?? ((f) => verifySignature(f, this.run)))(file);
-      if (bad) throw new Error(bad);
-
-      setInstall({ stage: 'installing', received, total: total || received });
+      setInstall({ stage: 'installing', received: size, total: size });
       log.info(`WARP installer opened: ${path.basename(file)}`);
       const code = await (this.deps.launch ?? launchInstaller)(file);
       this.cli = null;
@@ -279,5 +277,52 @@ export class WarpService {
     } finally {
       if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  /**
+   * One fetch of WARP_DOWNLOAD_URL into `dir`. Each chunk is copied before it is written and every
+   * write is awaited, so no buffer can be reused under a pending write; the SHA-256 of what arrived is
+   * then compared with the file read back from disk (`intact`).
+   */
+  private async downloadOnce(dir: string, attempt: number, setInstall: (i: WarpInstall) => void): Promise<{ file: string; size: number; intact: boolean }> {
+    const res = await (this.deps.fetch ?? fetch)(WARP_DOWNLOAD_URL, { redirect: 'follow' });
+    const final = new URL(res.url || WARP_DOWNLOAD_URL);
+    // Cloudflare redirects to a versioned URL on the same host. Anything else is refused.
+    if (final.protocol !== 'https:' || final.hostname !== new URL(WARP_DOWNLOAD_URL).hostname) throw new Error(`The download was redirected to ${final.host}, not Cloudflare. Stopped.`);
+    if (!res.ok || !res.body) throw new Error(`Cloudflare's download server answered ${res.status} ${res.statusText}.`);
+    const total = Number(res.headers.get('content-length')) || 0;
+    const file = path.join(dir, fileNameFrom(res.headers.get('content-disposition')));
+    const hash = createHash('sha256');
+    const reader = res.body.getReader();
+    const fh = await fs.open(file, 'w');
+    let received = 0;
+    let last = 0;
+    setInstall({ stage: 'downloading', received: 0, total, attempt });
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = Buffer.from(value); // copy: the stream may reuse its memory once we await
+        hash.update(chunk);
+        let off = 0;
+        while (off < chunk.length) off += (await fh.write(chunk, off, chunk.length - off)).bytesWritten;
+        received += chunk.length;
+        const now = Date.now();
+        if (now - last > 150) {
+          last = now;
+          setInstall({ stage: 'downloading', received, total, attempt });
+        }
+      }
+      await fh.sync();
+    } finally {
+      await fh.close();
+      reader.releaseLock();
+    }
+    if (total && received !== total) throw new Error(`The download stopped early (${received} of ${total} bytes).`);
+    setInstall({ stage: 'downloading', received, total: total || received, attempt });
+    const onDisk = await fs.readFile(file);
+    const intact = onDisk.length === received && createHash('sha256').update(onDisk).digest('hex') === hash.digest('hex');
+    if (!intact) log.warn(`WARP download damaged on disk (attempt ${attempt}): ${onDisk.length} of ${received} bytes`);
+    return { file, size: received, intact };
   }
 }

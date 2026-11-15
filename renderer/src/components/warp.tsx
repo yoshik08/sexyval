@@ -100,7 +100,11 @@ export function WarpRow() {
   const dot = phase === 'connected' ? 'bg-win' : phase === 'connecting' || s?.busy ? 'bg-warn' : phase === 'service-down' || phase === 'error' ? 'bg-loss' : 'bg-faint';
   let line = s ? STATE_TEXT[s.phase] : 'Checking…';
   if (s?.busy && pending) line = pending === 'on' ? 'Connecting…' : 'Disconnecting…';
-  if (s?.install.stage === 'downloading') line = s.install.total && s.install.received >= s.install.total ? 'Checking signature…' : s.install.total ? `${mb(s.install.received)} of ${mb(s.install.total)}` : mb(s.install.received);
+  if (s?.install.stage === 'downloading') {
+    line = s.install.total && s.install.received >= s.install.total ? 'Checking signature…' : s.install.total ? `${mb(s.install.received)} of ${mb(s.install.total)}` : mb(s.install.received);
+    // A damaged download is fetched again on its own; say so instead of silently restarting at 0%.
+    if ((s.install.attempt ?? 1) > 1 && line !== 'Checking signature…') line = `Retrying · ${line}`;
+  }
   if (s?.install.stage === 'installing') line = "Finish in Cloudflare's installer";
   const error = rpcError ?? (s?.install.stage === 'error' ? s.install.error : s?.error);
 

@@ -18,6 +18,8 @@ export type WarpPhase =
 
 export interface WarpInstall {
   stage: 'idle' | 'downloading' | 'installing' | 'error';
+  /** Download try number (a damaged download is fetched again). */
+  attempt?: number;
   /** Bytes received / total (total 0 when the server sent no length). */
   received: number;
   total: number;

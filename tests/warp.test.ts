@@ -153,7 +153,7 @@ describe('WarpService install', () => {
     const launched: string[] = [];
     const { w, events } = service(f, {
       fetch: okFetch(),
-      verify: async () => null,
+      verify: async () => ({ ok: true as const }),
       launch: async (file) => {
         launched.push(file);
         f.m.installed = true;
@@ -173,7 +173,7 @@ describe('WarpService install', () => {
 
   it('refuses a redirect off the Cloudflare host', async () => {
     const launched: string[] = [];
-    const { w } = service(fakeMachine({ installed: false }), { fetch: okFetch('https://mirror.example.com/warp.msi'), verify: async () => null, launch: async (f) => (launched.push(f), 0) });
+    const { w } = service(fakeMachine({ installed: false }), { fetch: okFetch('https://mirror.example.com/warp.msi'), verify: async () => ({ ok: true as const }), launch: async (f) => (launched.push(f), 0) });
     await w.refresh();
     const s = await w.installWarp();
     expect(s?.install.stage).toBe('error');
@@ -181,17 +181,89 @@ describe('WarpService install', () => {
     expect(launched).toHaveLength(0);
   });
 
-  it('does not open an installer whose signature fails', async () => {
+  it('never opens or retries an installer signed by someone else', async () => {
     const launched: string[] = [];
-    const { w } = service(fakeMachine({ installed: false }), { fetch: okFetch(), verify: async () => 'bad signature', launch: async (f) => (launched.push(f), 0) });
+    let fetches = 0;
+    const fetchOnce = okFetch();
+    const { w } = service(fakeMachine({ installed: false }), {
+      fetch: ((...a: Parameters<typeof fetch>) => (fetches++, fetchOnce(...a))) as typeof fetch,
+      verify: async () => ({ ok: false, corrupt: false, message: 'Signed by Mallory.' }),
+      launch: async (f) => (launched.push(f), 0),
+    });
     await w.refresh();
     const s = await w.installWarp();
-    expect(s?.install).toMatchObject({ stage: 'error', error: 'bad signature' });
+    expect(s?.install).toMatchObject({ stage: 'error', error: 'Signed by Mallory. It was not opened.' });
+    expect(fetches).toBe(1);
     expect(launched).toHaveLength(0);
   });
 
+  it('downloads again when the file arrives damaged (HashMismatch), then installs', async () => {
+    const launched: string[] = [];
+    let fetches = 0;
+    let checks = 0;
+    const fetchOnce = okFetch(undefined, 300_000);
+    const { w, events } = service(fakeMachine({ installed: false }), {
+      fetch: ((...a: Parameters<typeof fetch>) => (fetches++, fetchOnce(...a))) as typeof fetch,
+      verify: async () => (++checks === 1 ? { ok: false, corrupt: true, message: "Windows couldn't verify the installer's signature (HashMismatch)." } : { ok: true }),
+      launch: async (f) => (launched.push(f), 0),
+    });
+    await w.refresh();
+    await w.installWarp();
+    expect(fetches).toBe(2);
+    expect(launched).toHaveLength(1);
+    expect(events.some((e) => e.install.attempt === 2)).toBe(true);
+  });
+
+  it('gives up after repeated damaged downloads with a clear message', async () => {
+    const launched: string[] = [];
+    const { w } = service(fakeMachine({ installed: false }), {
+      fetch: okFetch(),
+      verify: async () => ({ ok: false, corrupt: true, message: "Windows couldn't verify the installer's signature (HashMismatch)." }),
+      launch: async (f) => (launched.push(f), 0),
+    });
+    await w.refresh();
+    const s = await w.installWarp();
+    expect(s?.install.stage).toBe('error');
+    expect(s?.install.error).toMatch(/kept arriving damaged \(3 tries/);
+    expect(launched).toHaveLength(0);
+  });
+
+  it('writes exactly the bytes that arrived, even from many small chunks', async () => {
+    const data = new Uint8Array(200_003).map((_, i) => (i * 31 + 7) & 0xff);
+    let seen: Buffer | null = null;
+    const chunky = (async () => {
+      // One shared buffer, overwritten after every read: a writer that keeps a reference corrupts the file.
+      const shared = new Uint8Array(4096);
+      let pos = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (pos >= data.length) return c.close();
+          const n = Math.min(shared.length, data.length - pos);
+          shared.set(data.subarray(pos, pos + n));
+          pos += n;
+          c.enqueue(shared.subarray(0, n));
+        },
+      });
+      const res = new Response(body, { headers: { 'content-length': String(data.length) } });
+      Object.defineProperty(res, 'url', { value: 'https://downloads.cloudflareclient.com/v1/download/windows/version/x' });
+      return res;
+    }) as typeof fetch;
+    const { w } = service(fakeMachine({ installed: false }), {
+      fetch: chunky,
+      verify: async (f) => {
+        seen = await import('node:fs').then((fs) => fs.promises.readFile(f));
+        return { ok: true };
+      },
+      launch: async () => 0,
+    });
+    await w.refresh();
+    await w.installWarp();
+    expect(seen).not.toBeNull();
+    expect(Buffer.compare(seen!, Buffer.from(data))).toBe(0);
+  });
+
   it('says so when the install is cancelled', async () => {
-    const { w } = service(fakeMachine({ installed: false }), { fetch: okFetch(), verify: async () => null, launch: async () => 1602 });
+    const { w } = service(fakeMachine({ installed: false }), { fetch: okFetch(), verify: async () => ({ ok: true as const }), launch: async () => 1602 });
     await w.refresh();
     const s = await w.installWarp();
     expect(s?.install.error).toMatch(/cancelled/);
