@@ -67,3 +67,15 @@ describe('last-5 extraction', () => {
     expect(pickHistoryIds(null)).toEqual([]);
   });
 });
+
+describe('ACS outside round-based modes', () => {
+  it('a deathmatch (one "round") has no ACS instead of its total score', async () => {
+    const { summarizeMatch, summarizePlayer } = await import('../shared/last5');
+    const d: any = { matchId: 'dm', startTime: 1, queueId: 'deathmatch', players: [{ subject: 'me', teamId: 'me', score: 6049, roundsPlayed: 1, kills: 19, deaths: 26, assists: 3 }], teams: [], roundResults: [] };
+    const s = summarizeMatch(d, 'me')!;
+    expect(s.acs).toBe(0);
+    expect(s.rounds).toBe(0);
+    const comp = { ...s, acs: 200 };
+    expect(summarizePlayer([s, comp]).acs).toBe(200);
+  });
+});

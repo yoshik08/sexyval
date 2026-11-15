@@ -1,5 +1,5 @@
 import type { MatchDetailView, MatchRow, ProfileView, ScoreboardRow } from '../../shared/features';
-import { summarizeMatch, pickHistoryIds, type TrimmedDetails } from '../../shared/last5';
+import { isRoundBased, summarizeMatch, pickHistoryIds, type TrimmedDetails } from '../../shared/last5';
 import { queueTag } from '../../shared/queues';
 import { peakTier, seasonRank } from '../../shared/stats';
 import type { RiotApi } from '../riot/api';
@@ -168,7 +168,7 @@ export class ProfileService {
         kills: p.kills,
         deaths: p.deaths,
         assists: p.assists,
-        acs: p.roundsPlayed ? Math.round(p.score / p.roundsPlayed) : 0,
+        acs: isRoundBased(p.roundsPlayed) ? Math.round(p.score / p.roundsPlayed) : 0,
         adr: p.adr ?? null,
         hsPct: p.hsPct ?? null,
         firstBloods: p.firstBloods ?? null,

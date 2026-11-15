@@ -173,6 +173,9 @@ export interface RawMatchSummary {
 }
 
 /** Extracts one player's line from a match. Returns null if they aren't in it. */
+/** ACS needs real rounds: DM/TDM count the whole match as one. */
+export const isRoundBased = (roundsPlayed: number) => roundsPlayed >= 3;
+
 export function summarizeMatch(d: TrimmedDetails, puuid: string): RawMatchSummary | null {
   const p = d.players.find((x) => x.subject === puuid);
   if (!p) return null;
@@ -187,6 +190,9 @@ export function summarizeMatch(d: TrimmedDetails, puuid: string): RawMatchSummar
     else result = 'L';
   }
   const score = mine && other ? `${mine.roundsWon}-${other.roundsWon}` : '-';
+  // Deathmatch / Team Deathmatch report the whole match as one "round": score ÷ rounds would be the total
+  // score (thousands). ACS only exists for round-based modes; elsewhere it's 0 and shown as "–".
+  const roundBased = isRoundBased(p.roundsPlayed);
   return {
     matchId: d.matchId,
     startTime: d.startTime,
@@ -195,12 +201,12 @@ export function summarizeMatch(d: TrimmedDetails, puuid: string): RawMatchSummar
     kills: p.kills,
     deaths: p.deaths,
     assists: p.assists,
-    acs: p.roundsPlayed > 0 ? Math.round(p.score / p.roundsPlayed) : 0,
+    acs: roundBased ? Math.round(p.score / p.roundsPlayed) : 0,
     mapId: d.mapId,
     queueId: d.queueId,
     queueTag: queueTag(d.queueId),
     score,
-    rounds: p.roundsPlayed,
+    rounds: roundBased ? p.roundsPlayed : 0,
     adr: p.adr ?? null,
     hsPct: p.hsPct ?? null,
     firstBloods: p.firstBloods ?? null,
@@ -212,7 +218,8 @@ export function summarizePlayer(rows: { result: MatchResult; kills: number; deat
   const losses = rows.filter((r) => r.result === 'L').length;
   const kills = rows.reduce((a, r) => a + r.kills, 0);
   const deaths = rows.reduce((a, r) => a + r.deaths, 0);
-  const acs = rows.length ? Math.round(rows.reduce((a, r) => a + r.acs, 0) / rows.length) : 0;
+  const withAcs = rows.filter((r) => r.acs > 0);
+  const acs = withAcs.length ? Math.round(withAcs.reduce((a, r) => a + r.acs, 0) / withAcs.length) : 0;
   const kd = deaths > 0 ? Math.round((kills / deaths) * 100) / 100 : kills;
   return { count: rows.length, wins, losses, kd, acs };
 }

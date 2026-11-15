@@ -94,7 +94,7 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
                     <td className="num px-3 text-right">{r.kills}</td>
                     <td className="num px-3 text-right">{r.deaths}</td>
                     <td className="num px-3 text-right">{r.assists}</td>
-                    <td className="num px-3 text-right">{r.acs}</td>
+                    <td className="num px-3 text-right">{r.acs || '–'}</td>
                     <td className="num px-3 text-right">{r.adr ?? '–'}</td>
                     <td className="num px-3 text-right">{r.hsPct != null ? `${r.hsPct}%` : '–'}</td>
                     <td className="num px-3 text-right">{r.firstBloods ?? '–'}</td>
@@ -278,7 +278,7 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue,
               </Panel>
               <Panel className="p-5">
                 <div className="label mb-2">ACS trend</div>
-                <LineChart title="ACS" points={stats.trend.map((t) => ({ x: t.t, y: t.acs, label: `${when(t.t)} · ${t.result}` }))} format={(v) => String(Math.round(v))} />
+                <LineChart title="ACS" points={stats.trend.filter((t) => t.acs > 0).map((t) => ({ x: t.t, y: t.acs, label: `${when(t.t)} · ${t.result}` }))} format={(v) => String(Math.round(v))} />
               </Panel>
             </div>
           )}

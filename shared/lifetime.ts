@@ -114,7 +114,8 @@ export function formOf(rows: LifetimeMatch[]): FormStats {
   const d = rows.reduce((a, r) => a + r.deaths, 0);
   // ACS per round across matches (a 26-round game counts more than a 13-round one).
   const rounds = rows.reduce((a, r) => a + (r.rounds ?? 0), 0);
-  const acs = rounds ? rows.reduce((a, r) => a + r.acs * (r.rounds ?? 0), 0) / rounds : rows.length ? rows.reduce((a, r) => a + r.acs, 0) / rows.length : 0;
+  const withAcs = rows.filter((r) => r.acs > 0);
+  const acs = rounds ? rows.reduce((a, r) => a + r.acs * (r.rounds ?? 0), 0) / rounds : withAcs.length ? withAcs.reduce((a, r) => a + r.acs, 0) / withAcs.length : 0;
   return { n: rows.length, wins, losses, winRate: wins + losses ? Math.round((wins / (wins + losses)) * 100) : undefined, kd: kdOf(k, d), acs: Math.round(acs) };
 }
 

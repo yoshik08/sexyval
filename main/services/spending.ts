@@ -9,7 +9,7 @@ import { readJson, writeJson } from '../paths';
 import { log } from '../log';
 
 /** Riot's own purchase-history article; the "Get my purchase history" button is on it (needs your Riot login). */
-export const RIOT_PURCHASE_HISTORY = 'https://support-valorant.riotgames.com/hc/en-us/articles/360045132434-Purchase-History-Riot-Games';
+export const RIOT_PURCHASE_HISTORY = 'https://support.riotgames.com/en-us/valorant/billing/checking-your-purchase-history';
 const FX_URL = 'https://api.frankfurter.dev/v1/latest?base=USD';
 const FX_TTL = 12 * 60 * 60 * 1000;
 

@@ -283,7 +283,7 @@ function PipTip({ m }: { m: MatchSummary }) {
           {m.kills} / {m.deaths} / {m.assists}
         </span>
         <span className="text-muted">ACS</span>
-        <span className="num text-right text-ink">{m.acs}</span>
+        <span className="num text-right text-ink">{m.acs || '–'}</span>
       </div>
     </div>
   );

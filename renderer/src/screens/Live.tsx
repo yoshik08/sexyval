@@ -128,7 +128,7 @@ function Idle({ state }: { state: AppState }) {
                     <div className="num text-right text-sm">
                       {m.kills}/{m.deaths}/{m.assists}
                     </div>
-                    <div className="num text-right text-sm text-muted">{m.acs} ACS</div>
+                    <div className="num text-right text-sm text-muted">{m.acs ? `${m.acs} ACS` : '–'}</div>
                     <div className={cx('t-num text-right text-md', m.result === 'W' ? 'text-win' : m.result === 'L' ? 'text-loss' : 'text-muted')}>{m.score}</div>
                   </div>
                 ))

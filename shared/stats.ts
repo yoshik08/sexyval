@@ -12,17 +12,20 @@ export interface GroupStat {
 }
 
 function group(rows: MatchRow[], keyOf: (r: MatchRow) => string | undefined, nameOf: (r: MatchRow) => string, iconOf?: (r: MatchRow) => string | undefined): GroupStat[] {
-  const m = new Map<string, { name: string; icon?: string; games: number; wins: number; decided: number; k: number; d: number; acs: number }>();
+  const m = new Map<string, { name: string; icon?: string; games: number; wins: number; decided: number; k: number; d: number; acs: number; acsN: number }>();
   for (const r of rows) {
     const key = keyOf(r);
     if (!key) continue;
-    const g = m.get(key) ?? { name: nameOf(r), icon: iconOf?.(r), games: 0, wins: 0, decided: 0, k: 0, d: 0, acs: 0 };
+    const g = m.get(key) ?? { name: nameOf(r), icon: iconOf?.(r), games: 0, wins: 0, decided: 0, k: 0, d: 0, acs: 0, acsN: 0 };
     g.games++;
     if (r.result === 'W' || r.result === 'L') g.decided++;
     if (r.result === 'W') g.wins++;
     g.k += r.kills;
     g.d += r.deaths;
-    g.acs += r.acs;
+    if (r.acs > 0) {
+      g.acs += r.acs;
+      g.acsN++;
+    }
     m.set(key, g);
   }
   return [...m.entries()]
@@ -34,7 +37,7 @@ function group(rows: MatchRow[], keyOf: (r: MatchRow) => string | undefined, nam
       wins: g.wins,
       winRate: g.decided ? Math.round((g.wins / g.decided) * 100) : 0,
       kd: g.d ? Math.round((g.k / g.d) * 100) / 100 : g.k,
-      acs: Math.round(g.acs / g.games),
+      acs: g.acsN ? Math.round(g.acs / g.acsN) : 0,
     }))
     .sort((a, b) => b.games - a.games || b.winRate - a.winRate);
 }

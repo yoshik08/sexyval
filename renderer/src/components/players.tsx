@@ -297,7 +297,7 @@ function MiniMatch({ m, narrow }: { m: MatchSummary; narrow?: boolean }) {
           <span className="num text-right text-ink/90">
             {m.kills}/{m.deaths}/{m.assists}
           </span>
-          <span className="num text-right text-muted">{m.acs} ACS</span>
+          <span className="num text-right text-muted">{m.acs ? `${m.acs} ACS` : '–'}</span>
           <span className={cx('num text-right font-semibold', tone)}>{m.score !== '-' ? m.score : m.result}</span>
         </>
       )}

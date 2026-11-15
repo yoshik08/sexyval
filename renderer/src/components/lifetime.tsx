@@ -60,7 +60,7 @@ export function MatchLine({ m, onOpen }: { m: MatchRow; onOpen?: (id: string) =>
       <span className="num text-right text-sm">
         {m.kills}/{m.deaths}/{m.assists}
       </span>
-      <span className="num text-right text-sm text-muted">{m.acs} ACS</span>
+      <span className="num text-right text-sm text-muted">{m.acs ? `${m.acs} ACS` : '–'}</span>
       <span className="num text-right text-sm text-muted">{m.hsPct != null ? `${m.hsPct}% HS` : '–'}</span>
       <span className={cx('num text-right text-sm', m.rrChange == null ? 'text-faint' : m.rrChange >= 0 ? 'text-win' : 'text-loss')}>{m.rrChange == null ? '–' : `${m.rrChange > 0 ? '+' : ''}${m.rrChange} RR`}</span>
       <span className={cx('num text-right font-display text-md font-semibold', m.result === 'W' ? 'text-win' : m.result === 'L' ? 'text-loss' : 'text-muted')}>{m.score}</span>

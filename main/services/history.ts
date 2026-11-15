@@ -25,6 +25,8 @@ export class HistoryService {
   /** Matches re-fetched this session because their cached copy predates partyId (at most once each). */
   private partyRefetched = new Set<string>();
   private loadInflight = new Map<string, Promise<void>>();
+  /** Matches Riot answered 404 for (remakes, some penalty games): not asked again for a while. */
+  private notFound = new Map<string, number>();
 
   constructor(
     private readonly api: RiotApi,
@@ -140,6 +142,7 @@ export class HistoryService {
       return disk && disk.matchId ? disk : null;
     }
     if (opts.cachedOnly) return mem ?? null;
+    if (!mem && Date.now() - (this.notFound.get(id) ?? 0) < 5 * 60 * 1000) return null;
     const p = (async () => {
       const disk = mem ?? (await readJson<TrimmedDetails | null>(this.file(id), null));
       if (disk && disk.matchId && !stale(disk)) {
@@ -158,7 +161,10 @@ export class HistoryService {
         throw e;
       }
       if (old) this.partyRefetched.add(id);
-      if (res.status === 404 || !res.json) return keepOld();
+      if (res.status === 404 || !res.json) {
+        if (res.status === 404 && !old) this.notFound.set(id, Date.now());
+        return keepOld();
+      }
       const t = trimDetails(res.json, id);
       this.details.set(id, t);
       await writeJson(this.file(id), t).catch((e) => log.warn('persist details failed', e));
