@@ -2,6 +2,7 @@ import path from 'node:path';
 import { httpRequest } from '../riot/http';
 import { readJson, writeJson } from '../paths';
 import { log } from '../log';
+import { toMinimap } from '../../shared/replay';
 import type { Catalog, CatalogExtra, CatalogSkin, CatalogTier, CatalogWeapon, SkinSource } from '../../shared/features';
 
 const BASE = 'https://valorant-api.com/v1';
@@ -9,8 +10,8 @@ const BASE = 'https://valorant-api.com/v1';
 const CHECK_EVERY = 6 * 60 * 60 * 1000;
 /** Even with an unchanged version, rebuild after this long (new weekly/event content lands without a patch). */
 const HARD_MAX_AGE = 3 * 24 * 60 * 60 * 1000;
-/** Bump when the cached catalog gains fields (2: skin.source, version). */
-const SCHEMA = 2;
+/** Bump when the cached catalog gains fields (2: skin.source, version; 3: map coordinate transforms). */
+const SCHEMA = 3;
 const TIER_RANK: Record<string, number> = { Select: 0, Deluxe: 1, Premium: 2, Exclusive: 3, Ultra: 4 };
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -264,7 +265,25 @@ export class CatalogService {
           }))
         : old.agents,
       maps: maps
-        ? maps.filter((m: any) => m.tacticalDescription).map((m: any) => ({ id: m.mapUrl, uuid: lc(m.uuid), name: m.displayName, sites: m.tacticalDescription, splash: str(m.splash), icon: str(m.displayIcon), coordinates: m.coordinates }))
+        ? maps.filter((m: any) => m.tacticalDescription).map((m: any) => ({
+            id: m.mapUrl,
+            uuid: lc(m.uuid),
+            name: m.displayName,
+            sites: m.tacticalDescription,
+            splash: str(m.splash),
+            icon: str(m.displayIcon),
+            coordinates: m.coordinates,
+            // Game coordinates -> minimap (0..1): x = gameY·xMultiplier + xScalarToAdd, y = gameX·yMultiplier + yScalarToAdd.
+            transform: typeof m.xMultiplier === 'number' ? { xm: m.xMultiplier, ym: m.yMultiplier, xa: m.xScalarToAdd, ya: m.yScalarToAdd } : undefined,
+            // Named areas ("A Main"), already on the minimap: replays say where a kill happened.
+            callouts:
+              typeof m.xMultiplier === 'number'
+                ? (m.callouts ?? [])
+                    .map((c: any) => ({ name: [c.superRegionName, c.regionName].filter((x: unknown) => typeof x === 'string' && x).join(' '), at: toMinimap(c.location, { xm: m.xMultiplier, ym: m.yMultiplier, xa: m.xScalarToAdd, ya: m.yScalarToAdd }) }))
+                    .filter((c: any) => c.name && c.at)
+                    .map((c: any) => ({ name: c.name, x: Math.round(c.at.x * 1e4) / 1e4, y: Math.round(c.at.y * 1e4) / 1e4 }))
+                : [],
+          }))
         : old.maps,
       weapons: weapons.map((w: any) => ({
         id: lc(w.uuid),

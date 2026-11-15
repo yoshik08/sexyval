@@ -49,6 +49,22 @@ export class MmrService {
     void this.load(puuid).finally(() => this.inflight.delete(puuid));
   }
 
+  /** Current + peak for one player, waiting for the lookup (cached like ensure). */
+  async fetch(puuid: string): Promise<MmrState | undefined> {
+    const e = this.entries.get(puuid);
+    if (!(e && e.status === 'done' && Date.now() - e.at < TTL)) {
+      if (!this.inflight.has(puuid)) {
+        this.inflight.add(puuid);
+        if (!e) this.entries.set(puuid, { status: 'loading', at: Date.now(), currentTier: 0, rr: 0, peakTier: 0 });
+        await this.load(puuid).finally(() => this.inflight.delete(puuid));
+      } else {
+        const end = Date.now() + 15_000;
+        while (this.inflight.has(puuid) && Date.now() < end) await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+    return this.get(puuid);
+  }
+
   private async load(puuid: string): Promise<void> {
     try {
       const res = await this.api.mmr(puuid);

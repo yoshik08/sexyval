@@ -147,13 +147,18 @@ export class ProfileService {
   async matchDetail(matchId: string): Promise<MatchDetailView> {
     const d = await this.history.getDetails(matchId);
     if (!d) throw new Error('Match details not available yet');
+    // Riot's match details now send empty gameName/tagLine for everyone; the name service has them.
+    await this.names.waitFor(d.players.filter((p) => !p.gameName).map((p) => p.subject), 3000);
     const rows: ScoreboardRow[] = d.players.map((p) => {
       const agent = this.assets.agent(p.characterId);
-      this.remember(p.subject, p.gameName, p.tagLine);
+      const n = this.names.get(p.subject);
+      const name = p.gameName || n?.name || undefined;
+      const tag = p.tagLine || n?.tag || undefined;
+      this.remember(p.subject, name, tag);
       return {
         puuid: p.subject,
-        name: p.gameName,
-        tag: p.tagLine,
+        name,
+        tag,
         teamId: p.teamId,
         agentId: p.characterId,
         agentName: agent?.name,

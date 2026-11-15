@@ -155,15 +155,23 @@ export interface OwnedState {
 }
 
 export type OwnedFilter = 'all' | 'owned' | 'not-owned';
-export type SkinSort = 'owned' | 'tier' | 'name' | 'newest';
+export type SkinSort = 'owned' | 'tier' | 'name' | 'newest' | 'price-desc' | 'price-asc';
+
+/** Pseudo tier ids for the tier filter: contract rewards (Battle Pass, Event Pass, agent gear) and untiered standard skins. */
+export const TIER_REWARD = 'reward';
+export const TIER_STANDARD = 'standard';
 
 export interface SkinFilter {
   owned: OwnedFilter;
   weaponId?: string;
   tierId?: string;
+  /** Any of these (content tier ids, TIER_REWARD, TIER_STANDARD); empty or missing = every tier. */
+  tierIds?: string[];
   themeId?: string;
   search?: string;
   sort: SkinSort;
+  /** Hide contract rewards (Battle Pass, Event Pass, agent gear): they aren't bought with VP. */
+  excludeBp?: boolean;
 }
 
 // ---------- Accounts / sign-in ----------
@@ -491,6 +499,8 @@ export interface FriendView {
   state?: string;
   product?: string;
   status?: string; // decoded valorant presence summary
+  /** Where they are: in Valorant, only on the Riot Mobile app, the Riot Client / another game, or offline. */
+  platform: 'valorant' | 'mobile' | 'client' | 'offline';
   partySize?: number;
   level?: number;
   rank?: RankInfo;
@@ -525,6 +535,89 @@ export interface Lineup {
   links: string[];
   images: string[]; // svlocal:// urls
   createdAt: number;
+}
+
+/** One community lineup (Blitz.gg library). x/y are percentages on Blitz's map layout image. */
+export interface LibraryLineup {
+  id: string;
+  title: string;
+  description?: string;
+  ability?: string;
+  difficulty?: string;
+  side?: 'attack' | 'defense';
+  video?: string;
+  thumbnail?: string;
+  x?: number;
+  y?: number;
+}
+
+export interface LineupMapArt {
+  /** Blitz's top-down layout (SVG). */
+  layout?: string;
+  attackRotation: number;
+  defenseRotation: number;
+}
+
+export interface LineupLibraryView {
+  status: 'ready' | 'error';
+  error?: string;
+  /** Blitz keys, e.g. "sova" / "ascent". */
+  agent: string;
+  map: string;
+  lineups: LibraryLineup[];
+  /** The Blitz page these come from (credited and linked in the UI). */
+  source: string;
+  fetchedAt?: number;
+  /** A refresh failed; this is the last copy on disk. */
+  stale?: boolean;
+  mapArt?: LineupMapArt;
+}
+
+// ---------- Spending ----------
+
+export interface SpendingState {
+  purchases: import('./spending').VpPurchase[];
+  fx: import('./spending').FxRates;
+  /** Battle Passes counted against the account value (override, else detected). */
+  battlePasses?: number;
+  battlePassesDetected?: number;
+  battlePassOverride?: number;
+  battlePassError?: string;
+  /** Riot region of the active account (sets the default currency). */
+  region?: string;
+  /** Riot's purchase-history window is open (scan is possible). */
+  riotWindowOpen: boolean;
+}
+
+// ---------- Replays ----------
+
+export interface ReplayListItem {
+  matchId: string;
+  startTime: number;
+  mapName?: string;
+  mapImage?: string;
+  queueTag?: string;
+  agentIcon?: string;
+  result?: 'W' | 'L' | 'D' | '-';
+  score?: string;
+  kda?: string;
+  /** A Valorant replay file (.vrf) for this match is on this PC. */
+  file?: { size: number; savedAt: number };
+}
+
+export interface ReplayView extends Omit<import('./replay').ReplayData, 'players'> {
+  players: (import('./replay').ReplayPlayer & { agentName?: string; agentIcon?: string })[];
+  me?: string;
+  mapName?: string;
+  /** Minimap image (svasset:// url); positions are 0..1 on it. */
+  minimap?: string;
+  callouts: { name: string; x: number; y: number }[];
+  /** Weapon uuid -> name + killfeed icon. */
+  weapons: Record<string, { name: string; icon?: string }>;
+  /** "<agentId>:<slot>" -> ability name + icon. */
+  abilities: Record<string, { name: string; icon?: string }>;
+  queueTag: string;
+  hasFile: boolean;
 }
 
 export interface WishlistState {

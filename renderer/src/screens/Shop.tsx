@@ -12,8 +12,9 @@ import { Img, Segmented, Skeleton } from '../components/ui';
 import { SkinTile, type TileData } from '../components/SkinTile';
 import { openSkin } from '../components/SkinDetail';
 import { PastBundles, ShopCalendar } from './StoreArchive';
+import { SpendingPanel } from './Spending';
 
-type Tab = 'daily' | 'bundles' | 'night' | 'past' | 'history';
+type Tab = 'daily' | 'bundles' | 'night' | 'past' | 'history' | 'spending';
 
 /** A currency in the wallet: the number eases to its new value when a purchase or refresh changes it. */
 function Balance({ value, label, dot }: { value: number; label: string; dot: string }) {
@@ -70,7 +71,7 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
   const options: [Tab, string][] = [['daily', 'Daily']];
   if (bundles.length) options.push(['bundles', bundles.length > 1 ? `Bundles · ${bundles.length}` : 'Bundle']);
   if (night) options.push(['night', 'Night Market']);
-  options.push(['past', 'Past bundles'], ['history', 'History']);
+  options.push(['past', 'Past bundles'], ['history', 'History'], ['spending', 'Spending']);
   const archive = active === 'past' || active === 'history';
 
   const tile = (i: ShopItem, source: string, sale?: boolean): TileData => {
@@ -101,8 +102,8 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
     <div className="mx-auto max-w-[1240px] px-6 xl:px-10 pb-20 pt-6">
       <div className="flex items-end justify-between gap-8">
         <div>
-          <h1 className="t-title text-page">{active === 'night' ? 'Night Market' : active === 'bundles' ? 'Bundles' : active === 'past' ? 'Past bundles' : active === 'history' ? 'Store history' : 'Daily Store'}</h1>
-          <p className="num mt-1.5 h-5 text-sm text-muted">{archive ? 'Every store SexyVal has seen, kept after it rotates.' : endsAt ? <>Resets in {countdown(endsAt - now)}</> : null}</p>
+          <h1 className="t-title text-page">{active === 'night' ? 'Night Market' : active === 'bundles' ? 'Bundles' : active === 'past' ? 'Past bundles' : active === 'history' ? 'Store history' : active === 'spending' ? 'Spending' : 'Daily Store'}</h1>
+          <p className="num mt-1.5 h-5 text-sm text-muted">{active === 'spending' ? 'VP purchases, money spent and what the account is worth.' : archive ? 'Every store SexyVal has seen, kept after it rotates.' : endsAt ? <>Resets in {countdown(endsAt - now)}</> : null}</p>
         </div>
         <div className="flex shrink-0 items-center gap-5 xl:gap-7">
           {shop?.wallet ? (
@@ -129,9 +130,11 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
       {options.length > 1 && <Segmented className="mt-6" value={active} options={options} onChange={setTab} />}
 
       <div className="mt-6">
-        {shop?.status === 'error' && !archive && <ErrorNote>{shop.error}</ErrorNote>}
+        {shop?.status === 'error' && !archive && active !== 'spending' && <ErrorNote>{shop.error}</ErrorNote>}
 
-        {active === 'past' ? (
+        {active === 'spending' ? (
+          <SpendingPanel wallet={shop?.wallet?.vp} />
+        ) : active === 'past' ? (
           <PastBundles />
         ) : active === 'history' ? (
           <ShopCalendar myPuuid={myPuuid} />

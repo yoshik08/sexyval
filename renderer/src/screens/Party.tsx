@@ -5,6 +5,7 @@ import { cx } from '../lib/format';
 import { Img, Panel, RankBadge, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, Note, PageHeader, Untested, useRpc } from '../components/kit';
 import { useInterval } from '../lib/store';
+import { PlayerName } from '../components/PlayerName';
 
 export function PartyScreen({ connected, valorant }: { connected: boolean; valorant: boolean }) {
   const { data, setData, error, loading, reload } = useRpc<PartyView>('party:get', [], connected);
@@ -84,7 +85,7 @@ export function PartyScreen({ connected, valorant }: { connected: boolean; valor
                   {m.cardIcon ? <Img src={m.cardIcon} alt="" className="h-11 w-11 shrink-0 rounded-sm" /> : <div className="h-11 w-11 shrink-0 rounded-sm bg-white/5" />}
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2 whitespace-nowrap text-sm font-medium">
-                      {m.name ? <span className="min-w-0 truncate">{m.name}<span className="text-faint">#{m.tag}</span></span> : <Skeleton className="h-3.5 w-24" />}
+                      {m.name ? <PlayerName name={m.name} tag={m.tag} className="min-w-0 truncate" /> : <Skeleton className="h-3.5 w-24" />}
                       {m.isOwner && <span className="font-display text-2xs font-bold uppercase tracking-label text-warn">Owner</span>}
                       {m.isMe && <span className="font-display text-2xs font-bold uppercase tracking-label text-accent">You</span>}
                     </div>

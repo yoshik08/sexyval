@@ -147,8 +147,8 @@ export class HistoryService {
         return disk;
       }
       const old = disk && disk.matchId ? disk : null;
-      if (old) this.partyRefetched.add(id);
-      // A failed re-fetch keeps the old copy (no party data, still a match).
+      // A failed re-fetch keeps the old copy (no party data, still a match) and may be retried later in
+      // the session; only an answer from Riot marks it as done.
       const keepOld = () => (old ? (this.details.set(id, old), old) : null);
       let res;
       try {
@@ -157,6 +157,7 @@ export class HistoryService {
         if (old) return keepOld();
         throw e;
       }
+      if (old) this.partyRefetched.add(id);
       if (res.status === 404 || !res.json) return keepOld();
       const t = trimDetails(res.json, id);
       this.details.set(id, t);

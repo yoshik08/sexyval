@@ -39,6 +39,9 @@ const MIME: Record<string, string> = {
   '.woff': 'font/woff',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.json': 'application/json',
 };
 
@@ -72,7 +75,8 @@ export function handleAssets(cacheDir: string): void {
     } catch {
       return new Response('bad', { status: 400 });
     }
-    if (remote.protocol !== 'https:' || !(remote.hostname === 'valorant-api.com' || remote.hostname.endsWith('.valorant-api.com'))) {
+    // valorant-api.com game art; blitz-cdn.blitz.gg for lineup thumbnails and map layouts (Lineups screen).
+    if (remote.protocol !== 'https:' || !(remote.hostname === 'valorant-api.com' || remote.hostname.endsWith('.valorant-api.com') || remote.hostname === 'blitz-cdn.blitz.gg')) {
       return new Response('forbidden host', { status: 403 });
     }
     const key = crypto.createHash('sha1').update(remote.href).digest('hex');
@@ -121,7 +125,8 @@ export function handleAssets(cacheDir: string): void {
 export const MB = 1024 * 1024;
 const PREVIEW_MAX = 2;
 // streamedVideo URLs from valorant-api.com point at Riot's CDN.
-const videoHostOk = (h: string) => h === 'valorant.dyn.riotcdn.net' || h === 'valorant-api.com' || h.endsWith('.valorant-api.com');
+// blitz-cdn-videos.blitz.gg: community lineup clips (Lineups screen).
+const videoHostOk = (h: string) => h === 'valorant.dyn.riotcdn.net' || h === 'valorant-api.com' || h.endsWith('.valorant-api.com') || h === 'blitz-cdn-videos.blitz.gg';
 
 export interface VideoOptions {
   dir: string;

@@ -171,6 +171,13 @@ describe('friend presence', () => {
     expect(friendPresence([{ product: 'league_of_legends', state: 'chat' }]).status).toBe('Online');
     expect(friendPresence([{ product: 'league_of_legends', state: 'away' }]).status).toBe('Away');
     expect(friendPresence([{ product: 'riot_client', state: 'mobile' }]).status).toBe('On Riot Mobile');
+    expect(friendPresence([{ product: 'riot_client', state: 'mobile' }]).platform).toBe('mobile');
+    expect(friendPresence([{ product: 'riot_client', state: 'chat', platform: 'android' }]).platform).toBe('mobile');
+    expect(friendPresence([{ product: 'riot_client', state: 'chat' }]).platform).toBe('client');
+    // Phone app + PC client open at once: they're at the PC.
+    expect(friendPresence([{ product: 'riot_client', state: 'mobile' }, { product: 'riot_client', state: 'chat' }]).platform).toBe('client');
+    expect(friendPresence([{ product: 'riot_client', state: 'mobile' }, { product: 'valorant', state: 'chat' }]).platform).toBe('valorant');
+    expect(friendPresence([]).platform).toBe('offline');
   });
   it('prefers the Valorant presence when a friend has several', () => {
     const r = friendPresence([{ product: 'league_of_legends', state: 'chat' }, { product: 'valorant', state: 'chat', private: b64({ sessionLoopState: 'PREGAME' }) }, { product: 'riot_client', state: 'chat' }]);

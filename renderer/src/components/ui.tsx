@@ -6,7 +6,7 @@ import type { Connection, Last5State, MatchSummary, RankInfo, SideInfo, Toast } 
 import { UNVERIFIED_NOTE } from '../../../shared/side';
 import { api } from '../lib/api';
 import { cx, kd } from '../lib/format';
-import { Check, CaretDown, WarningCircle, Info, X } from '../lib/icons';
+import { Check, CheckCircle, CaretDown, WarningCircle, Info, X } from '../lib/icons';
 import { reveal } from '../lib/motion';
 
 /** Image with fade-in and graceful fallback (assets can be missing). */
@@ -402,24 +402,36 @@ export function StatusChip({ conn }: { conn?: Connection }) {
   );
 }
 
-const TOAST_ICON = { info: Info, warn: WarningCircle, error: WarningCircle };
+const TOAST_ICON = { info: Info, warn: WarningCircle, error: WarningCircle, ok: CheckCircle };
+type LocalToast = Omit<Toast, 'level'> & { level: Toast['level'] | 'ok' };
+const localToastSubs = new Set<(t: LocalToast) => void>();
+/** Renderer-side toast (copy confirmations etc.); same stack as the main process's toasts. */
+export function showToast(message: string, level: LocalToast['level'] = 'ok', ms?: number): void {
+  const t: LocalToast & { ms?: number } = { id: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, level, message, at: Date.now(), ms };
+  localToastSubs.forEach((fn) => fn(t));
+}
 export function Toasts() {
-  const [items, setItems] = useState<Toast[]>([]);
-  useEffect(
-    () =>
-      api.onToast((t) => {
-        setItems((xs) => [...xs.slice(-3), t]);
-        setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== t.id)), t.level === 'error' ? 8000 : 4500);
-      }),
-    [],
-  );
+  const [items, setItems] = useState<LocalToast[]>([]);
+  useEffect(() => {
+    const push = (t: LocalToast & { ms?: number }) => {
+      // A repeat of the newest message replaces it instead of stacking (copying names in a row).
+      setItems((xs) => [...xs.filter((x) => !(x.message === t.message && x.level === t.level)).slice(-3), t]);
+      setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== t.id)), t.ms ?? (t.level === 'error' ? 8000 : t.level === 'ok' ? 1800 : 4500));
+    };
+    localToastSubs.add(push);
+    const off = api.onToast(push);
+    return () => {
+      localToastSubs.delete(push);
+      off();
+    };
+  }, []);
   return (
     <div className="pointer-events-none fixed bottom-5 right-5 z-[70] flex w-[360px] flex-col gap-2">
       {items.map((t) => {
         const Icon = TOAST_ICON[t.level];
         return (
           <div key={t.id} role="status" className="toast-in material-thick pointer-events-auto flex items-start gap-3 rounded-2xl px-4 py-3 text-sm shadow-[0_18px_50px_-10px_rgba(0,0,0,0.9)] ring-1 ring-white/10">
-            <Icon size={18} weight="fill" className={cx('mt-0.5 shrink-0', t.level === 'error' ? 'text-loss' : t.level === 'warn' ? 'text-warn' : 'text-muted')} />
+            <Icon size={18} weight="fill" className={cx('mt-0.5 shrink-0', t.level === 'error' ? 'text-loss' : t.level === 'warn' ? 'text-warn' : t.level === 'ok' ? 'text-win' : 'text-muted')} />
             <span className="text-ink/90">{t.message}</span>
             <button className="press ml-auto shrink-0 text-faint hover:text-ink" onClick={() => setItems((xs) => xs.filter((x) => x.id !== t.id))} aria-label="Dismiss">
               <X size={14} weight="bold" />

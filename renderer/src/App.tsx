@@ -3,7 +3,7 @@ import type { AppState, Connection, View } from '../../shared/types';
 import type { UiResumeState } from '../../shared/update';
 import { api } from './lib/api';
 import { cx } from './lib/format';
-import { Broadcast, Compass, Crosshair, Gauge, GearSix, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
+import { Broadcast, Compass, Crosshair, FilmStrip, Gauge, GearSix, MapPin, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
 import { withViewTransition } from './lib/motion';
 import { playerNavStore, startStores, useLoadoutDirty, useSettings, useStore, useVideoPlaying } from './lib/store';
 import { MmrScreen } from './screens/Mmr';
@@ -20,6 +20,8 @@ import { PartyScreen } from './screens/Party';
 import { LoadoutScreen } from './screens/Loadout';
 import { ProfilesScreen } from './screens/Profiles';
 import { HubScreen } from './screens/Hub';
+import { LineupsScreen } from './screens/Lineups';
+import { ReplaysScreen } from './screens/Replays';
 
 type NavItem = { id: View; label: string; Icon: ComponentType<IconProps> };
 // Groups are separated by space only: no section labels above anything.
@@ -36,6 +38,8 @@ const GROUPS: NavItem[][] = [
     { id: 'mmr', label: 'MMR', Icon: Gauge },
     { id: 'party', label: 'Party', Icon: UsersThree },
     { id: 'hub', label: 'Hub', Icon: Compass },
+    { id: 'lineups', label: 'Lineups', Icon: MapPin },
+    { id: 'replays', label: 'Replays', Icon: FilmStrip },
   ],
 ];
 const SETTINGS: NavItem = { id: 'settings', label: 'Settings', Icon: GearSix };
@@ -267,7 +271,7 @@ export function App() {
         <div className="drag absolute inset-x-0 top-0 z-20 h-10 pr-[148px]" />
         <div ref={scrollRef} className={cx('h-full pt-10 [scrollbar-gutter:stable]', view === 'collection' ? 'overflow-hidden' : 'overflow-y-auto')}>
           {view === 'live' && <LiveScreen state={state} onLoadout={() => go('loadout')} />}
-          {view === 'shop' && <ShopScreen initialTab={sub === 'night' || sub === 'bundles' || sub === 'past' || sub === 'history' ? sub : 'daily'} connected={connected} myPuuid={state?.conn.puuid} />}
+          {view === 'shop' && <ShopScreen initialTab={sub === 'night' || sub === 'bundles' || sub === 'past' || sub === 'history' || sub === 'spending' ? sub : 'daily'} connected={connected} myPuuid={state?.conn.puuid} />}
           {view === 'collection' && <CollectionScreen />}
           {view === 'loadout' && <LoadoutScreen connected={connected} />}
           {view === 'progress' && <ProgressScreen connected={connected} />}
@@ -286,6 +290,8 @@ export function App() {
               }}
             />
           )}
+          {view === 'lineups' && <LineupsScreen initialTab={sub === 'mine' || sub === 'library' ? sub : undefined} />}
+          {view === 'replays' && <ReplaysScreen connected={connected} />}
           {view === 'settings' && <SettingsScreen state={state} initialTab={(sub as any) ?? 'general'} />}
         </div>
       </main>

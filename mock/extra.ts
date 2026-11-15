@@ -100,11 +100,12 @@ export function createExtra(ctx: ExtraCtx) {
       platform: null,
       private: Buffer.from(JSON.stringify(priv)).toString('base64'),
       privateJwt: null,
-      product: 'valorant',
+      // Friend 2 has only the Riot Client open, friend 3 is on the Riot Mobile app.
+      product: i === 2 || i === 3 ? 'riot_client' : 'valorant',
       puuid: p,
       region: 'eu1',
-      resource: 'RC-1',
-      state: i === 4 ? 'away' : 'chat',
+      resource: i === 3 ? 'riot_mobile' : 'RC-1',
+      state: i === 4 ? 'away' : i === 3 ? 'mobile' : 'chat',
       summary: '',
       time: Date.now(),
     };

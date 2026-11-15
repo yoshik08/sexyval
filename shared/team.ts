@@ -39,7 +39,11 @@ export const BOOTSTRAP_N = 1000;
 export const NORMAL_FROM = 8;
 /** Premades with fewer shared games are listed, never ranked. */
 export const MIN_RANKED_GAMES = 3;
-/** …and so are premades in nearly every match: under this many games without them there is no baseline. */
+/**
+ * Under this many games without them the with/without comparison has no baseline. Such premades (in nearly
+ * every match) are still ranked, on the ridge impact, their play in your losses and the MMR gap, with the
+ * with/without part left out; `thinBaseline` says so.
+ */
 export const MIN_BASELINE_GAMES = 3;
 /** "Biggest drain" / "Best partner" need |drain| at least this and this many games. */
 export const EXTREME_DRAIN = 25;
@@ -515,8 +519,10 @@ export interface SquadRow {
    */
   rrCostEstimate?: number;
   verdict: Verdict;
-  /** Enough games with them (MIN_RANKED_GAMES) and without them (MIN_BASELINE_GAMES) to be ranked. */
+  /** Enough games with them (MIN_RANKED_GAMES) to be ranked. */
   eligible: boolean;
+  /** Fewer than MIN_BASELINE_GAMES games without them: ranked without the with/without comparison. */
+  thinBaseline: boolean;
   shared: SharedGame[];
 }
 
@@ -717,9 +723,11 @@ export function buildSquad(input: SquadInput): { squad: SquadRow[]; randoms: Ran
     const theirRRList = info?.rrByMatch ? w.map((m) => info.rrByMatch![m.matchId]).filter(defined) : [];
     const beta = rrModel ? rrModel[1 + j] : undefined;
     const shrunk = delta != null ? delta * shrink : undefined;
-    const parts = { beta: norm(beta != null ? -beta : undefined, DRAIN_SCALES.beta), delta: norm(shrunk != null ? -shrunk : undefined, DRAIN_SCALES.delta), z: norm(them.meanZLosses != null ? -them.meanZLosses : undefined, DRAIN_SCALES.z), gap: norm(gap, DRAIN_SCALES.gap) };
+    const thinBaseline = wo.length < MIN_BASELINE_GAMES;
+    // With one or two games without them, "without" is noise: that part drops out of the score.
+    const parts = { beta: norm(beta != null ? -beta : undefined, DRAIN_SCALES.beta), delta: thinBaseline ? 0 : norm(shrunk != null ? -shrunk : undefined, DRAIN_SCALES.delta), z: norm(them.meanZLosses != null ? -them.meanZLosses : undefined, DRAIN_SCALES.z), gap: norm(gap, DRAIN_SCALES.gap) };
     const drain = 100 * (DRAIN_WEIGHTS.beta * parts.beta + DRAIN_WEIGHTS.delta * parts.delta + DRAIN_WEIGHTS.z * parts.z + DRAIN_WEIGHTS.gap * parts.gap);
-    const eligible = n >= MIN_RANKED_GAMES && wo.length >= MIN_BASELINE_GAMES;
+    const eligible = n >= MIN_RANKED_GAMES;
     const shared: SharedGame[] = [...w]
       .sort((x, y) => y.startTime - x.startTime)
       .map((m) => {
@@ -780,6 +788,7 @@ export function buildSquad(input: SquadInput): { squad: SquadRow[]; randoms: Ran
       rrCostEstimate: rrModel ? Math.round(sum(w.map((m) => m.rr - controlsOnly(rowOf.get(m.matchId)!)))) : undefined,
       verdict: eligible ? 'neutral' : 'not enough games',
       eligible,
+      thinBaseline,
       shared,
     };
   });

@@ -1,17 +1,51 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { FriendRequestView, FriendView, LeaderboardView, Lineup } from '../../../shared/features';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import type { FriendRequestView, FriendView, LeaderboardView } from '../../../shared/features';
 import { ago, cx } from '../lib/format';
 import { img } from '../lib/media';
 import { Img, Panel, RankBadge, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, Note, PageHeader, TabBar, useRpc } from '../components/kit';
 import { useInterval } from '../lib/store';
+import { ArrowRight, Desktop, DeviceMobile, GameController, type IconProps } from '../lib/icons';
+import { PlayerName } from '../components/PlayerName';
 
-type Tab = 'friends' | 'leaderboard' | 'agents' | 'maps' | 'weapons' | 'lineups';
+type Tab = 'friends' | 'leaderboard' | 'agents' | 'maps' | 'weapons';
 
 /** Game text carries style tags like <whitebold>Wingman</> or <debuffred>; show the words only. */
 const plainText = (s: unknown) => String(s ?? '').replace(/<\/?[a-z]*>/gi, '');
 /** Ability slots as the keys players know. */
 const SLOT_KEY: Record<string, string> = { Ability1: 'Q', Ability2: 'E', Grenade: 'C', Ultimate: 'X', Passive: 'Passive' };
+
+const PLATFORM_GROUPS: { key: FriendView['platform']; label: string; hint: string; Icon: ComponentType<IconProps> }[] = [
+  { key: 'valorant', label: 'In Valorant', hint: 'Playing or in the menus', Icon: GameController },
+  { key: 'mobile', label: 'Riot Mobile', hint: 'Online on the phone app only: can chat, can’t queue', Icon: DeviceMobile },
+  { key: 'client', label: 'Online elsewhere', hint: 'Riot Client open, or another Riot game', Icon: Desktop },
+  { key: 'offline', label: 'Offline', hint: '', Icon: Desktop },
+];
+
+function FriendRow({ f, onProfile }: { f: FriendView; onProfile: (q: string) => void }) {
+  const Icon = PLATFORM_GROUPS.find((g) => g.key === f.platform)?.Icon ?? Desktop;
+  const dot = !f.online ? 'bg-faint' : f.platform === 'mobile' ? 'bg-[#5ab0ff]' : f.state === 'away' ? 'bg-warn' : f.platform === 'valorant' ? 'bg-win' : 'bg-white/60';
+  return (
+    <div className={cx('flex items-center gap-3 border-b border-line px-5 py-2.5 last:border-b-0', !f.online && 'opacity-55')}>
+      <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-muted" title={PLATFORM_GROUPS.find((g) => g.key === f.platform)?.label}>
+        <Icon size={16} weight={f.platform === 'valorant' ? 'fill' : 'regular'} />
+        <span className={cx('absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-surface', dot)} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm">
+          <PlayerName name={f.name} tag={f.tag} />
+          {f.note && <span className="ml-2 text-xs text-faint">“{f.note}”</span>}
+        </div>
+        <div className="text-xs text-muted">{f.online ? (f.status ?? 'Online') + (f.partySize && f.partySize > 1 ? ` · party of ${f.partySize}` : '') : f.lastOnline ? `Last online ${ago(f.lastOnline)}` : 'Offline'}</div>
+      </div>
+      {f.rank && <RankBadge rank={f.rank} compact />}
+      {f.level && <span className="num w-12 text-right text-xs text-muted">Lv {f.level}</span>}
+      <button className="press shrink-0 rounded-full p-1.5 text-faint hover:bg-white/[0.08] hover:text-ink" title="Open profile" aria-label={`Open ${f.name}'s profile`} onClick={() => onProfile(`${f.name}#${f.tag}`)}>
+        <ArrowRight size={14} weight="bold" />
+      </button>
+    </div>
+  );
+}
 
 function Friends({ riotClient, onProfile }: { riotClient: boolean; onProfile: (q: string) => void }) {
   const { data, setData, error, reload } = useRpc<{ friends: FriendView[]; requests: FriendRequestView[] }>('hub:friends', [], riotClient);
@@ -19,30 +53,37 @@ function Friends({ riotClient, onProfile }: { riotClient: boolean; onProfile: (q
   const [err, setErr] = useState<string | null>(null);
   useInterval(() => riotClient && void reload(), 15000, [riotClient, reload]);
   if (!riotClient) return <Note>Friends and presence come from the Riot Client’s local chat API. Start the Riot Client to see them (a web sign-in can’t reach chat).</Note>;
-  const online = data?.friends.filter((f) => f.online) ?? [];
-  const offline = data?.friends.filter((f) => !f.online) ?? [];
+  const groups = PLATFORM_GROUPS.map((g) => ({ ...g, list: (data?.friends ?? []).filter((f) => (f.platform ?? (f.online ? 'client' : 'offline')) === g.key) }));
+  const onlineCount = (data?.friends ?? []).filter((f) => f.online).length;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_clamp(280px,26vw,340px)] gap-4 xl:gap-5">
-      <Panel>
-        <div className="border-b border-line px-5 py-3 label">Online · {online.length}</div>
-        {error && <div className="p-4"><ErrorNote>{error}</ErrorNote></div>}
-        {!data && !error && <Skeleton className="m-4 h-40" />}
-        {[...online, ...offline].map((f) => (
-          <div key={f.puuid} className={cx('flex items-center gap-3 border-b border-line px-5 py-2.5 last:border-b-0', !f.online && 'opacity-55')}>
-            <span className={cx('h-2 w-2 rounded-full', f.online ? (f.state === 'away' ? 'bg-warn' : 'bg-win') : 'bg-faint')} />
-            <button className="min-w-0 flex-1 text-left" onClick={() => onProfile(`${f.name}#${f.tag}`)}>
-              <div className="truncate text-sm">
-                {f.name}
-                <span className="text-faint">#{f.tag}</span>
-                {f.note && <span className="ml-2 text-xs text-faint">“{f.note}”</span>}
-              </div>
-              <div className="text-xs text-muted">{f.online ? (f.status ?? 'Online') + (f.partySize && f.partySize > 1 ? ` · party of ${f.partySize}` : '') : f.lastOnline ? `Last online ${ago(f.lastOnline)}` : 'Offline'}</div>
-            </button>
-            {f.rank && <RankBadge rank={f.rank} compact />}
-            {f.level && <span className="num w-12 text-right text-xs text-muted">Lv {f.level}</span>}
-          </div>
-        ))}
-      </Panel>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+          <span className="num text-ink">{onlineCount} online</span>
+          {groups.slice(0, 3).map((g) => (
+            <span key={g.key} className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1" title={g.hint}>
+              <g.Icon size={12} weight="bold" /> {g.label} <span className="num text-ink">{g.list.length}</span>
+            </span>
+          ))}
+        </div>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        {!data && !error && <Skeleton className="h-40" />}
+        {data &&
+          groups
+            .filter((g) => g.list.length)
+            .map((g) => (
+              <Panel key={g.key}>
+                <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+                  <span className="label">{g.label} · {g.list.length}</span>
+                  {g.hint && <span className="text-2xs text-faint">{g.hint}</span>}
+                </div>
+                {g.list.map((f) => (
+                  <FriendRow key={f.puuid} f={f} onProfile={onProfile} />
+                ))}
+              </Panel>
+            ))}
+        {data && !data.friends.length && <Note>No friends yet.</Note>}
+      </div>
       <div className="flex flex-col gap-5">
         <Panel className="p-5">
           <form
@@ -69,7 +110,7 @@ function Friends({ riotClient, onProfile }: { riotClient: boolean; onProfile: (q
           {(data?.requests ?? []).map((r) => (
             <div key={r.puuid} className="flex items-center gap-2 border-b border-line px-5 py-2.5 text-sm last:border-b-0">
               <span className={cx('font-display text-2xs font-bold uppercase tracking-label', r.direction === 'in' ? 'text-win' : 'text-muted')}>{r.direction === 'in' ? 'In' : 'Out'}</span>
-              <span className="min-w-0 flex-1 truncate">{r.name}<span className="text-faint">#{r.tag}</span></span>
+              <PlayerName name={r.name} tag={r.tag} className="min-w-0 flex-1 truncate" />
               {r.direction === 'out' ? (
                 <Btn tone="danger" onClick={async () => { const x = await act<any>('hub:cancelRequest', r.puuid); if (x.ok) setData(x.data); }}>Cancel</Btn>
               ) : (
@@ -117,7 +158,7 @@ function Leaderboard({ connected }: { connected: boolean }) {
           <div key={p.rank} className="grid grid-cols-[48px_36px_minmax(0,1fr)_120px_76px_64px] items-center gap-3 border-b border-line px-5 py-2 last:border-b-0">
             <span className="num font-display text-md font-bold text-muted">#{p.rank}</span>
             {p.cardIcon ? <Img src={p.cardIcon} alt="" className="h-8 w-8 rounded-sm" /> : <div className="h-8 w-8 rounded-sm bg-white/5" />}
-            <span className={cx('truncate text-sm', p.anonymized && 'italic text-faint')}>{p.name}{p.tag && <span className="text-faint">#{p.tag}</span>}</span>
+            {p.anonymized ? <span className="truncate text-sm italic text-faint">{p.name}</span> : <PlayerName name={p.name} tag={p.tag} className="truncate text-sm" />}
             {p.rankInfo ? <RankBadge rank={p.rankInfo} /> : <span className="text-xs text-muted">Tier {p.tier}</span>}
             <span className="num text-right text-sm">{p.rr} RR</span>
             <span className="num text-right text-sm text-muted">{p.wins} W</span>
@@ -209,95 +250,6 @@ function Browser({ kind }: { kind: 'agents' | 'maps' | 'weapons' }) {
   );
 }
 
-function Lineups() {
-  const { data: list, setData } = useRpc<Lineup[]>('hub:lineups', []);
-  const browse = useRpc<any>('browse:get', []);
-  const [draft, setDraft] = useState<Partial<Lineup>>({ title: '', links: [], images: [] });
-  const [link, setLink] = useState('');
-  const [filter, setFilter] = useState<{ agentId?: string; mapId?: string }>({});
-  const agents: any[] = useMemo(() => [...(browse.data?.agents ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [browse.data]);
-  const maps: any[] = useMemo(() => [...(browse.data?.maps ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [browse.data]);
-  const shown = (list ?? []).filter((l) => (!filter.agentId || l.agentId === filter.agentId) && (!filter.mapId || l.mapId === filter.mapId));
-  const save = async () => {
-    const r = await act<Lineup[]>('hub:saveLineup', { ...draft, title: draft.title || 'Untitled lineup' });
-    if (r.ok) {
-      setData(r.data);
-      setDraft({ title: '', links: [], images: [] });
-    }
-  };
-  const sel = 'field';
-  return (
-    <div className="grid grid-cols-[minmax(0,1fr)_clamp(290px,28vw,360px)] gap-4 xl:gap-5">
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap gap-2">
-          <select className={sel} value={filter.agentId ?? ''} onChange={(e) => setFilter({ ...filter, agentId: e.target.value || undefined })}>
-            <option value="">All agents</option>
-            {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-          <select className={sel} value={filter.mapId ?? ''} onChange={(e) => setFilter({ ...filter, mapId: e.target.value || undefined })}>
-            <option value="">All maps</option>
-            {maps.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-        </div>
-        {shown.map((l) => (
-          <Panel key={l.id} className="p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="font-display text-md font-semibold uppercase tracking-wide">{l.title}</div>
-                <div className="text-xs text-muted">
-                  {agents.find((a) => a.id === l.agentId)?.name ?? 'Any agent'} · {maps.find((m) => m.id === l.mapId)?.name ?? 'Any map'}{l.site ? ` · ${l.site} site` : ''}
-                </div>
-              </div>
-              <Btn tone="danger" onClick={async () => { const r = await act<Lineup[]>('hub:deleteLineup', l.id); if (r.ok) setData(r.data); }}>Delete</Btn>
-            </div>
-            {l.notes && <p className="mt-2 whitespace-pre-wrap text-sm text-ink/85">{l.notes}</p>}
-            {l.images.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {l.images.map((src) => <Img key={src} src={src} alt="" className="h-28 rounded-sm object-cover" />)}
-              </div>
-            )}
-            {l.links.length > 0 && (
-              <ul className="mt-2 text-xs text-muted">
-                {l.links.map((u) => <li key={u} className="select-text truncate">{u}</li>)}
-              </ul>
-            )}
-          </Panel>
-        ))}
-        {!shown.length && <Note>No lineups yet. Riot doesn’t provide any; add your own with screenshots and links.</Note>}
-      </div>
-      <Panel className="flex flex-col gap-3 p-5">
-        <div className="label">New lineup</div>
-        <input value={draft.title ?? ''} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Title (e.g. A main molly from spawn)" className={cx(sel, 'w-full')} />
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2">
-          <select className={sel} value={draft.agentId ?? ''} onChange={(e) => setDraft({ ...draft, agentId: e.target.value || undefined })}>
-            <option value="">Agent</option>
-            {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-          <select className={sel} value={draft.mapId ?? ''} onChange={(e) => setDraft({ ...draft, mapId: e.target.value || undefined })}>
-            <option value="">Map</option>
-            {maps.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-          <select className={sel} value={draft.site ?? ''} onChange={(e) => setDraft({ ...draft, site: e.target.value || undefined })}>
-            <option value="">Site</option>
-            {['A', 'B', 'C', 'Mid'].map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        <textarea value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} rows={4} placeholder="Notes" className="field-area" />
-        <div className="flex gap-2">
-          <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…" className={cx(sel, 'min-w-0 flex-1')} />
-          <Btn disabled={!/^https?:\/\//.test(link)} onClick={() => { setDraft({ ...draft, links: [...(draft.links ?? []), link] }); setLink(''); }}>Add link</Btn>
-        </div>
-        <Btn onClick={async () => { const r = await act<string | null>('hub:pickImage'); if (r.ok && r.data) setDraft({ ...draft, images: [...(draft.images ?? []), r.data] }); }}>Add image…</Btn>
-        <div className="flex flex-wrap gap-2">
-          {(draft.images ?? []).map((s) => <Img key={s} src={s} alt="" className="h-16 rounded-sm" />)}
-          {(draft.links ?? []).map((u) => <span key={u} className="truncate text-2xs text-muted">{u}</span>)}
-        </div>
-        <Btn tone="primary" onClick={() => void save()}>Save lineup</Btn>
-      </Panel>
-    </div>
-  );
-}
-
 export function HubScreen({ connected, riotClient, initialTab, onProfile }: { connected: boolean; riotClient: boolean; initialTab?: Tab; onProfile: (q: string) => void }) {
   const [tab, setTab] = useState<Tab>(initialTab ?? 'friends');
   useEffect(() => {
@@ -308,7 +260,7 @@ export function HubScreen({ connected, riotClient, initialTab, onProfile }: { co
       <PageHeader label="Hub" title="Hub" />
       <div className="mb-5">
         <TabBar
-          tabs={[['friends', 'Friends'], ['leaderboard', 'Leaderboard'], ['agents', 'Agents'], ['maps', 'Maps'], ['weapons', 'Weapons'], ['lineups', 'Lineups']]}
+          tabs={[['friends', 'Friends'], ['leaderboard', 'Leaderboard'], ['agents', 'Agents'], ['maps', 'Maps'], ['weapons', 'Weapons']]}
           value={tab}
           onChange={setTab}
         />
@@ -316,7 +268,6 @@ export function HubScreen({ connected, riotClient, initialTab, onProfile }: { co
       {tab === 'friends' && <Friends riotClient={riotClient} onProfile={onProfile} />}
       {tab === 'leaderboard' && <Leaderboard connected={connected} />}
       {(tab === 'agents' || tab === 'maps' || tab === 'weapons') && <Browser kind={tab} />}
-      {tab === 'lineups' && <Lineups />}
     </div>
   );
 }

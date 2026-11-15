@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { cx } from '../lib/format';
 import { saveSettings, useSettings } from '../lib/store';
 import { Panel, Select, Toggle } from '../components/ui';
-import { act, Btn, ErrorNote } from '../components/kit';
+import { act, BetaTag, Btn, ErrorNote } from '../components/kit';
 
 function useLive<T>(rpc: string, event: string): [T | null, (v: T) => void] {
   const [v, setV] = useState<T | null>(null);
@@ -39,6 +39,10 @@ export function StretchTab() {
   const available = (w: number, h: number) => !mon || mon.modes.some((m) => m.w === w && m.h === h);
   return (
     <div data-stretch className="flex flex-col gap-6">
+      <div className="flex items-start gap-3 rounded-2xl bg-warn/[0.08] px-4 py-3 text-sm text-ink/90">
+        <BetaTag />
+        <span>Stretch is in beta and doesn’t work reliably yet. If your display ends up on the wrong resolution, turn it off here or set it back in Windows display settings.</span>
+      </div>
       <Panel className="divide-y divide-white/[0.06] px-6">
         <Toggle checked={s.stretchEnabled} onChange={(v) => void saveSettings({ stretchEnabled: v })} label="Stretched resolution" />
         <div className="flex flex-wrap items-center gap-2 py-4">

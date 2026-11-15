@@ -7,6 +7,7 @@ import { saveSettings, useSettings } from '../lib/store';
 import { Btn } from '../components/kit';
 import { Img, Last5Pips, Panel, SectionTitle, Segmented, SideBadge, Skeleton, tint } from '../components/ui';
 import { ExpandPanel, isHidden, PartyBar, PartyChip, PlayerDetail, RankPair, rowHandlers, ScoreBadge, useDensity, useExpansion } from '../components/players';
+import { PlayerName } from '../components/PlayerName';
 
 export function LiveScreen({ state, onLoadout }: { state: AppState | null; onLoadout: () => void }) {
   if (!state) return <Waiting message="Starting…" />;
@@ -97,8 +98,7 @@ function Idle({ state }: { state: AppState }) {
     <div className="mx-auto max-w-[1180px] px-6 xl:px-10 pb-16 pt-6">
       <div className="mb-8 flex items-end justify-between gap-8">
         <h1 className="t-title text-page">
-          {me?.name ?? <Skeleton className="h-9 w-48" />}
-          {me?.tag && <span className="ml-2 text-faint">#{me.tag}</span>}
+          {me?.name ? <PlayerName name={me.name} tag={me.tag} tagClassName="ml-2 text-faint" /> : <Skeleton className="h-9 w-48" />}
         </h1>
         <p className="max-w-xs text-right text-sm text-muted">{state.phase === 'queue' ? 'Searching for a match.' : 'You are in the menus. Agent select and live matches show up here on their own.'}</p>
       </div>
@@ -208,8 +208,8 @@ function AllyCard({ p, open, x }: { p: PlayerRow; open: boolean; x: ReturnType<t
       <div className="flex flex-1 flex-col gap-2.5 px-4 pb-4">
         <div className="min-w-0">
           <div className="t-head truncate text-[19px]">{p.agent?.name ?? '—'}</div>
-          <div className="truncate text-sm text-muted" title={!hidden && p.name ? `${p.name}#${p.tag}` : undefined}>
-            {hidden ? <span className="italic text-faint">Hidden</span> : p.name ? <>{p.name}<span className="text-faint">#{p.tag}</span></> : <Skeleton className="mt-1 h-3.5 w-24" />}
+          <div className="truncate text-sm text-muted">
+            {hidden ? <span className="italic text-faint">Hidden</span> : p.name ? <PlayerName name={p.name} tag={p.tag} /> : <Skeleton className="mt-1 h-3.5 w-24" />}
           </div>
           {hidden && p.accountLevel != null && <div className="text-xs text-faint">Level {p.accountLevel}</div>}
           {p.partyGroup && <div className="mt-1.5"><PartyChip p={p} /></div>}
@@ -324,14 +324,11 @@ function PlayerLine({ p, open, x, enemy }: { p: PlayerRow; open: boolean; x: Ret
           <Img src={p.agent?.icon} alt={p.agent?.name ?? ''} className="h-9 w-9 shrink-0 rounded-xl bg-white/5" fallback={<div className="h-9 w-9 shrink-0 rounded-xl bg-white/5" />} />
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-              <span className="min-w-0 truncate" title={!hidden && p.name ? `${p.name}#${p.tag}` : undefined}>
+              <span className="min-w-0 truncate">
                 {hidden ? (
                   <span className="italic text-faint">Hidden</span>
                 ) : p.name ? (
-                  <>
-                    {p.name}
-                    <span className="text-faint">#{p.tag}</span>
-                  </>
+                  <PlayerName name={p.name} tag={p.tag} />
                 ) : (
                   <Skeleton className="h-3.5 w-28" />
                 )}

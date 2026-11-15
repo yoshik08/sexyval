@@ -35,14 +35,22 @@ export function presenceStatus(p: any): string | undefined {
  * "online": the chat service reports Riot Client users under riot_client or even league_of_legends
  * when they aren't playing anything, so SexyVal never says "Playing …" for those.
  */
-export function friendPresence(list: any[]): { online: boolean; state?: string; product?: string; status?: string; valorant: any | null } {
+/** A chat presence from the Riot Mobile app (state "mobile", a mobile product, or an iOS/Android platform). */
+export function isMobilePresence(x: any): boolean {
+  if (!x) return false;
+  return x.state === 'mobile' || /mobile/i.test(String(x.product ?? '')) || /^(ios|android|mobile)/i.test(String(x.platform ?? '')) || /mobile/i.test(String(x.resource ?? ''));
+}
+
+export function friendPresence(list: any[]): { online: boolean; state?: string; product?: string; status?: string; platform: FriendView['platform']; valorant: any | null } {
   const live = list.filter((x) => x && x.state !== 'offline');
-  if (!live.length) return { online: false, valorant: null };
-  const val = live.find((x) => x.product === 'valorant');
-  const pick = val ?? live[0];
+  if (!live.length) return { online: false, platform: 'offline', valorant: null };
+  const val = live.find((x) => x.product === 'valorant' && !isMobilePresence(x));
+  // Desktop beats mobile: someone with the Riot Client open and the app on their phone is on PC.
+  const pick = val ?? live.find((x) => !isMobilePresence(x)) ?? live[0];
+  const mobile = !val && isMobilePresence(pick);
   const dec = val ? decodePresence(val.private) : null;
-  const status = dec ? presenceStatus(dec) : val ? 'Online' : pick.state === 'mobile' ? 'On Riot Mobile' : pick.state === 'away' ? 'Away' : 'Online';
-  return { online: true, state: pick.state, product: pick.product, status: status ?? 'Online', valorant: dec };
+  const status = dec ? presenceStatus(dec) : val ? 'Online' : mobile ? 'On Riot Mobile' : pick.state === 'away' ? 'Away' : 'Online';
+  return { online: true, state: pick.state, product: pick.product, status: status ?? 'Online', platform: val ? 'valorant' : mobile ? 'mobile' : 'client', valorant: dec };
 }
 
 export class HubService {
@@ -74,6 +82,7 @@ export class HubService {
         state: pr.state,
         product: pr.product,
         status: pr.status,
+        platform: pr.platform,
         partySize: dec?.partySize,
         level: dec?.accountLevel,
         rank: dec?.competitiveTier ? this.assets.rank(dec.competitiveTier) : undefined,

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { MatchDetailView, ProfileView } from '../../../shared/features';
+import type { MmrState } from '../../../shared/types';
+import { ArrowRight } from '../lib/icons';
 import { analyzeMatches, filterMatches, type HistoryFilter } from '../../../shared/stats';
 import { queueName } from '../../../shared/queues';
 import { cx } from '../lib/format';
@@ -8,18 +10,36 @@ import { act, Btn, ErrorNote, PageHeader, TabBar } from '../components/kit';
 import { TrackerButton } from '../components/players';
 import { DeltaBars, HBars, LineChart } from '../components/charts';
 import { LifetimeSection, MatchLine, MmrChip } from '../components/lifetime';
+import { PlayerName } from '../components/PlayerName';
 
 const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onClose: () => void; onOpenProfile: (puuid: string) => void }) {
   const [d, setD] = useState<MatchDetailView | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [peaks, setPeaks] = useState<Record<string, MmrState | undefined> | null>(null);
   useEffect(() => {
-    void act<MatchDetailView>('profile:match', matchId).then((r) => (r.ok ? setD(r.data) : setErr(r.error)));
+    let live = true;
+    void act<MatchDetailView>('profile:match', matchId).then((r) => {
+      if (!live) return;
+      if (!r.ok) return setErr(r.error);
+      setD(r.data);
+      // Peak ranks come from each player's own MMR record: fetched after the table is up.
+      void act<Record<string, MmrState | undefined>>('profile:peaks', r.data.rows.map((x) => x.puuid)).then((p) => live && setPeaks(p.ok ? p.data : {}));
+    });
+    return () => {
+      live = false;
+    };
   }, [matchId]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const cols = ['Player', 'Rank', 'Peak', 'K', 'D', 'A', 'ACS', 'ADR', 'HS%', 'FB', 'Avg loadout'];
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-8" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="drawer-in max-h-full w-full max-w-[1100px] overflow-auto rounded-sm border border-line2 bg-surface" onClick={(e) => e.stopPropagation()}>
+      <div className="drawer-in max-h-full w-full max-w-[1160px] overflow-auto rounded-sm border border-line2 bg-surface" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
           <div>
             <div className="label">Match · {d?.queueTag}</div>
@@ -35,8 +55,8 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-line text-left">
-                {['Player', 'Rank', 'K', 'D', 'A', 'ACS', 'ADR', 'HS%', 'FB', 'Avg loadout'].map((h, i) => (
-                  <th key={h} className={cx('label px-3 py-2 font-semibold', i > 1 && 'text-right')}>{h}</th>
+                {cols.map((h, i) => (
+                  <th key={h} className={cx('label px-3 py-2 font-semibold', i > 2 && 'text-right')}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -44,19 +64,33 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
               {d.rows.map((r, i) => {
                 const teamStart = i === 0 || d.rows[i - 1].teamId !== r.teamId;
                 const won = d.teams.find((t) => t.teamId === r.teamId)?.won;
+                const pk = peaks?.[r.puuid];
                 return (
                   <tr key={r.puuid} className={cx('border-b border-line', teamStart && i > 0 && 'border-t-2 border-t-line2')}>
                     <td className="px-3 py-1.5">
-                      <button className="flex items-center gap-2 text-left hover:text-accent" onClick={() => onOpenProfile(r.puuid)}>
-                        <span className={cx('h-6 w-[3px] rounded-full', won ? 'bg-win' : 'bg-loss')} />
-                        {r.agentIcon && <Img src={r.agentIcon} alt="" className="h-7 w-7 rounded-sm" />}
-                        <span>
-                          {r.name ?? '—'}
-                          <span className="text-faint">#{r.tag}</span>
-                        </span>
-                      </button>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={cx('h-6 w-[3px] shrink-0 rounded-full', won ? 'bg-win' : 'bg-loss')} />
+                        <button className="press shrink-0 rounded-sm" title="Open profile" onClick={() => onOpenProfile(r.puuid)}>
+                          {r.agentIcon ? <Img src={r.agentIcon} alt={r.agentName ?? ''} className="h-7 w-7 rounded-sm" /> : <span className="block h-7 w-7 rounded-sm bg-white/5" />}
+                        </button>
+                        <PlayerName name={r.name} tag={r.tag} className="min-w-0 truncate" fallback={<span className="text-faint">Unknown player</span>} />
+                        <button className="press ml-1 shrink-0 text-faint hover:text-ink" title="Open profile" aria-label="Open profile" onClick={() => onOpenProfile(r.puuid)}>
+                          <ArrowRight size={12} weight="bold" />
+                        </button>
+                      </div>
                     </td>
                     <td className="px-3"><RankBadge rank={r.rank} compact /></td>
+                    <td className="px-3">
+                      {!peaks ? (
+                        <Skeleton className="h-6 w-6 rounded-full" />
+                      ) : pk?.status === 'done' && pk.peak?.rank ? (
+                        <span title={`Peak ${pk.peak.rank.name}${pk.peak.act ? ` · ${pk.peak.act}` : ''}`}>
+                          <RankBadge rank={pk.peak.rank} compact />
+                        </span>
+                      ) : (
+                        <span className="text-xs text-faint" title={pk?.status === 'error' ? 'Rank lookup failed' : 'No ranked games'}>–</span>
+                      )}
+                    </td>
                     <td className="num px-3 text-right">{r.kills}</td>
                     <td className="num px-3 text-right">{r.deaths}</td>
                     <td className="num px-3 text-right">{r.assists}</td>
@@ -71,7 +105,7 @@ function Scoreboard({ matchId, onClose, onOpenProfile }: { matchId: string; onCl
             </tbody>
           </table>
         )}
-        {d && <p className="px-5 py-3 text-xs text-faint">ADR, HS%, first bloods and economy come from per-round data; “–” means the match had none.</p>}
+        {d && <p className="px-5 py-3 text-xs text-faint">Click a name to copy it; the agent icon or arrow opens the profile. Peak is the player’s highest rank across acts. ADR, HS%, first bloods and economy come from per-round data; “–” means the match had none.</p>}
       </div>
     </div>
   );
@@ -147,8 +181,7 @@ export function ProfilesScreen({ connected, myPuuid, initialQuery, historyQueue,
               <div>
                 <div className="label">{profile.title ?? 'No title'}</div>
                 <h2 className="mt-1 font-display text-stat font-bold uppercase tracking-wide">
-                  {profile.name ?? 'Unknown'}
-                  <span className="text-faint">#{profile.tag ?? '?'}</span>
+                  <PlayerName name={profile.name} tag={profile.tag} />
                 </h2>
                 <div className="mt-1 text-sm text-muted">Level {profile.level ?? '–'}{profile.leaderboardRank ? ` · Leaderboard #${profile.leaderboardRank}` : ''}</div>
                 <div className="mt-3 flex flex-wrap gap-2">

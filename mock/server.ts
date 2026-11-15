@@ -255,6 +255,76 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     });
   }
 
+  // Map transforms from valorant-api.com (game units <-> minimap 0..1), for replay positions.
+  const MAP_TF: Record<string, [number, number, number, number]> = {
+    '/Game/Maps/Ascent/Ascent': [0.00007, -0.00007, 0.813895, 0.573242],
+    '/Game/Maps/Bonsai/Bonsai': [0.000078, -0.000078, 0.842188, 0.697578],
+    '/Game/Maps/Duality/Duality': [0.000059, -0.000059, 0.576941, 0.967566],
+    '/Game/Maps/Triad/Triad': [0.000075, -0.000075, 1.09345, 0.642728],
+    '/Game/Maps/Port/Port': [0.000072, -0.000072, 0.460214, 0.304687],
+    '/Game/Maps/Jam/Jam': [0.000072, -0.000072, 0.454789, 0.917752],
+    '/Game/Maps/Juliett/Juliett': [0.000078, -0.000078, 0.5, 0.515625],
+    '/Game/Maps/Pitt/Pitt': [0.000078, -0.000078, 0.480469, 0.916016],
+  };
+
+  /**
+   * Replay data like the live top-level `kills` list: every kill with everyone's position, plus plant spots.
+   * Own seeded generator, so nothing else in the mock moves. Players walk from their spawn side toward a site.
+   */
+  function replayKills(matchId: string, map: string, players: { p: string; t: Color }[], rounds: { roundNum: number; winningTeam: Color; bombPlanter?: string; plantRoundTime: number; plantSite: string }[], half: number, firstAtk: Color) {
+    let s = 7;
+    for (const ch of `${matchId}:replay`) s = (s * 31 + ch.charCodeAt(0)) >>> 0;
+    const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    const tf = MAP_TF[map] ?? MAP_TF['/Game/Maps/Ascent/Ascent'];
+    const toGame = (u: number, v: number) => ({ x: (v - tf[3]) / tf[1], y: (u - tf[2]) / tf[0] });
+    const kills: any[] = [];
+    const plants: Record<number, any> = {};
+    for (const r of rounds) {
+      const atk = r.roundNum < half ? firstAtk : other(firstAtk);
+      const site = r.plantSite || (rnd() < 0.5 ? 'A' : 'B');
+      const target = site === 'A' ? [0.3, 0.3] : [0.7, 0.3];
+      const pos = new Map<string, [number, number]>();
+      for (const { p, t } of players) pos.set(p, t === atk ? [0.35 + rnd() * 0.3, 0.82 + rnd() * 0.08] : [0.35 + rnd() * 0.3, 0.18 + rnd() * 0.08]);
+      const alive = new Set(players.map((x) => x.p));
+      const team = new Map(players.map((x) => [x.p, x.t]));
+      const step = (k: number) => {
+        for (const p of alive) {
+          const [x, y] = pos.get(p)!;
+          const [tx, ty] = team.get(p) === atk ? target : [target[0] + (rnd() - 0.5) * 0.2, target[1] + 0.05];
+          pos.set(p, [Math.min(0.95, Math.max(0.05, x + (tx - x) * k + (rnd() - 0.5) * 0.05)), Math.min(0.95, Math.max(0.05, y + (ty - y) * k + (rnd() - 0.5) * 0.05))]);
+        }
+      };
+      const loc = () => [...alive].map((p) => ({ subject: p, viewRadians: rnd() * Math.PI * 2, location: toGame(...pos.get(p)!) }));
+      let t = 8000 + Math.floor(rnd() * 12000);
+      const loser = other(r.winningTeam);
+      const winnerDeaths = Math.floor(rnd() * 4);
+      let wd = 0;
+      while ([...alive].some((p) => team.get(p) === loser) && t < 95_000) {
+        step(0.25);
+        const victimTeam: Color = wd < winnerDeaths && rnd() < 0.4 ? r.winningTeam : loser;
+        const vs = [...alive].filter((p) => team.get(p) === victimTeam);
+        const ks = [...alive].filter((p) => team.get(p) !== victimTeam);
+        if (!vs.length || !ks.length) break;
+        const victim = vs[Math.floor(rnd() * vs.length)];
+        const killer = ks[Math.floor(rnd() * ks.length)];
+        if (victimTeam === r.winningTeam) wd++;
+        const assist = ks.filter((x) => x !== killer && rnd() < 0.25);
+        kills.push({ round: r.roundNum, roundTime: t, gameTime: t, killer, victim, assistants: assist, victimLocation: toGame(...pos.get(victim)!), playerLocations: loc(), finishingDamage: { damageType: 'Weapon', damageItem: rnd() < 0.7 ? '9C82E19D-4575-0200-1A81-3EACF00CF872' : 'EE8E8D15-496B-07AC-E5F6-8FAE5D4C7B1A', isSecondaryFireMode: false } });
+        alive.delete(victim);
+        t += 1500 + Math.floor(rnd() * 9000);
+        if (r.bombPlanter && !plants[r.roundNum] && t > r.plantRoundTime) {
+          step(0.6);
+          const pl = alive.has(r.bombPlanter) ? r.bombPlanter : [...alive].find((p) => team.get(p) === atk);
+          if (pl) {
+            pos.set(pl, [target[0], target[1]]);
+            plants[r.roundNum] = { bombPlanter: pl, plantRoundTime: r.plantRoundTime, plantSite: site, plantLocation: toGame(target[0], target[1]), plantPlayerLocations: loc() };
+          }
+        }
+      }
+    }
+    return { kills, plants };
+  }
+
   function buildBombDetails(
     matchId: string,
     r: () => number,
@@ -298,6 +368,8 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
         playerStats: roundStats(matchId, roundNum, players.map((x) => x.p)),
       };
     });
+    const replay = replayKills(matchId, map, players, roundResults as any, half, firstAtk);
+    for (const rr of roundResults as any[]) Object.assign(rr, replay.plants[rr.roundNum] ?? {});
     const wins = { Blue: seq.filter((c) => c === 'Blue').length, Red: seq.filter((c) => c === 'Red').length };
     return {
       matchInfo: {
@@ -343,7 +415,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
       coaches: [],
       teams: (['Blue', 'Red'] as Color[]).map((c) => ({ teamId: c, won: c === winner, roundsPlayed: total, roundsWon: wins[c], numPoints: wins[c] })),
       roundResults,
-      kills: [],
+      kills: replay.kills,
     };
   }
 

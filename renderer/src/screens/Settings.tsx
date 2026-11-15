@@ -6,14 +6,20 @@ import { ago, cx, fmtBytes } from '../lib/format';
 import { saveSettings, useSettings } from '../lib/store';
 import { Panel, Segmented, Select, Toggle } from '../components/ui';
 import { WarningCircle } from '../lib/icons';
-import { Bar, Btn, Note, PageHeader } from '../components/kit';
+import { Bar, BetaTag, Btn, Note, PageHeader } from '../components/kit';
 import { BoostTab, StretchTab } from './SystemSettings';
+import { PlayerName } from '../components/PlayerName';
 
 type Tab = 'general' | 'accounts' | 'stretch' | 'boost' | 'debug';
-const TABS: [Tab, string][] = [
+const TABS: [Tab, ReactNode][] = [
   ['general', 'General'],
   ['accounts', 'Accounts'],
-  ['stretch', 'Stretch'],
+  [
+    'stretch',
+    <span key="s" className="inline-flex items-center gap-1.5">
+      Stretch <BetaTag />
+    </span>,
+  ],
   ['boost', 'Boost'],
   ['debug', 'Diagnostics'],
 ];
@@ -343,8 +349,7 @@ function Accounts({ state }: { state: AppState | null }) {
               <span className={cx('h-2.5 w-2.5 rounded-full', a.status === 'ok' ? 'bg-win' : a.status === 'expired' ? 'bg-loss' : a.status === 'error' ? 'bg-warn' : 'bg-faint')} />
               <div className="min-w-0 flex-1">
                 <div className="text-base">
-                  {a.name ?? 'Account'}
-                  <span className="text-faint">#{a.tag ?? '?'}</span>
+                  <PlayerName name={a.name} tag={a.tag} fallback="Account" />
                   {a.active && <span className="ml-2 rounded-full bg-white/[0.12] px-2 py-0.5 text-2xs font-semibold text-ink">Active</span>}
                 </div>
                 <div className="text-sm text-muted">

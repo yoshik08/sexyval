@@ -120,3 +120,20 @@ describe('owned items response shapes', () => {
     expect(parseOwnedItems({ Entitlements: [null, { ItemID: 5 }] }, type).items).toEqual([]);
   });
 });
+
+describe('price sort, tiers and Battle Pass filter', () => {
+  const tiers = [{ id: 't1', name: 'Select', rank: 0 }, { id: 't3', name: 'Premium', rank: 2 }];
+  const sk = (id: string, tierId?: string, source?: any) => ({ id, name: id, weaponId: 'w', tierId, order: 0, firstSeen: 0, levels: [{ id: id + 'l' }], chromas: [], source }) as any;
+  const skins = [sk('cheap', 't1'), sk('pricey', 't3'), sk('bp', 't3', { kind: 'battlepass', name: 'X', level: 1 }), sk('free'), sk('unknown', 't3')];
+  const vp: Record<string, number> = { cheap: 875, pricey: 1775 };
+  it('sorts by VP both ways with unpriced skins last', () => {
+    expect(filterSkins(skins, { owned: 'all', sort: 'price-desc' }, null, tiers, (id) => vp[id]).map((s) => s.id).slice(0, 2)).toEqual(['pricey', 'cheap']);
+    const asc = filterSkins(skins, { owned: 'all', sort: 'price-asc' }, null, tiers, (id) => vp[id]).map((s) => s.id);
+    expect(asc.slice(0, 2)).toEqual(['cheap', 'pricey']);
+  });
+  it('excludes Battle Pass rewards and filters by several tiers, rewards and standard', () => {
+    expect(filterSkins(skins, { owned: 'all', sort: 'name', excludeBp: true }, null, tiers).map((s) => s.id)).not.toContain('bp');
+    expect(filterSkins(skins, { owned: 'all', sort: 'name', tierIds: ['t1', 'standard'] }, null, tiers).map((s) => s.id)).toEqual(['cheap', 'free']);
+    expect(filterSkins(skins, { owned: 'all', sort: 'name', tierIds: ['reward'] }, null, tiers).map((s) => s.id)).toEqual(['bp']);
+  });
+});

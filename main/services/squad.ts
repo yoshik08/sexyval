@@ -13,6 +13,8 @@ import type { ProfileService } from './profiles';
 import { log } from '../log';
 
 const TTL = 5 * 60 * 1000;
+/** A view built with some match details missing (fetch failed / rate limited) is rebuilt sooner. */
+const INCOMPLETE_TTL = 30 * 1000;
 /** Premades looked up (rank + their own competitive updates): only those with this many shared games… */
 export const MIN_LOOKUP_GAMES = 2;
 /** …and at most this many, most shared games first. */
@@ -46,6 +48,8 @@ interface Base {
   /** Premades queued for a lookup. */
   queue: string[];
   hidden: Set<string>;
+  /** Window matches whose details (or party data) couldn't be fetched this time. */
+  missing: number;
 }
 
 /**
@@ -72,7 +76,8 @@ export class SquadService {
     const puuid = await this.d.profiles.resolve(query);
     if (this.d.isHidden(puuid)) throw new Error(HIDDEN_ERR);
     const hit = this.cache.get(puuid);
-    if (hit && !force && Date.now() - hit.fetchedAt < TTL) {
+    const incomplete = (this.bases.get(puuid)?.missing ?? 0) > 0;
+    if (hit && !force && Date.now() - hit.fetchedAt < (incomplete ? INCOMPLETE_TTL : TTL)) {
       // Same matches; only the live party may have changed (forecast).
       const base = this.bases.get(puuid);
       return base && hit.livePenalty !== this.live(puuid) ? this.rebuild(base) : hit;
@@ -93,14 +98,23 @@ export class SquadService {
     const sr = seasonRank(src.mmr, act?.id);
     const facts: Record<string, MatchFacts | undefined> = {};
     const team: Record<string, TeamFacts | undefined> = {};
-    await Promise.all(
-      src.updates.map(async (u) => {
-        // Copies cached before partyId was kept are fetched once more for their party data.
-        const det = await this.d.history.getDetails(u.matchId, { needParty: true }).catch(() => null);
-        facts[u.matchId] = det ? factsFromDetails(det, puuid) : undefined;
-        team[u.matchId] = det ? teamFactsFromDetails(det, puuid) : undefined;
-      }),
-    );
+    const fill = async (ids: string[]) =>
+      Promise.all(
+        ids.map(async (id) => {
+          // Copies cached before partyId was kept are fetched once more for their party data.
+          const det = await this.d.history.getDetails(id, { needParty: true }).catch(() => null);
+          facts[id] = det ? factsFromDetails(det, puuid) : undefined;
+          team[id] = det ? teamFactsFromDetails(det, puuid) : undefined;
+        }),
+      );
+    await fill(src.updates.map((u) => u.matchId));
+    // A burst of 25 fetches can hit Riot's rate limit; one slower second pass for the gaps, so games
+    // with a regular premade aren't silently dropped (they'd show "not enough games").
+    const gaps = () => src.updates.filter((u) => !team[u.matchId] || team[u.matchId]!.stack === 'unknown').map((u) => u.matchId);
+    if (gaps().length) {
+      await new Promise((r) => setTimeout(r, 1500));
+      for (const id of gaps()) await fill([id]);
+    }
     const actId = act?.id.toLowerCase();
     const seen = new Map<string, number>();
     for (const u of src.updates) {
@@ -115,7 +129,9 @@ export class SquadService {
       .map(([p]) => p);
     // Names for visible premades only (bounded wait; the match details' names are the fallback).
     await this.d.names.waitFor([puuid, ...[...seen.keys()].filter((p) => !hidden.has(p))], 1500);
-    const base: Base = { puuid, input: { updates: src.updates, facts, team, myTier: sr.tier, myRR: sr.rr, actId: act?.id, actStart: act?.start, puuid }, seen, queue, hidden };
+    const missing = src.updates.filter((u) => !team[u.matchId]).length;
+    if (gaps().length) log.warn(`squad: ${gaps().length} of ${src.updates.length} matches without details or party data (${missing} without details)`);
+    const base: Base = { puuid, input: { updates: src.updates, facts, team, myTier: sr.tier, myRR: sr.rr, actId: act?.id, actStart: act?.start, puuid }, seen, queue, hidden, missing };
     this.bases.set(puuid, base);
     const view = this.rebuild(base);
     void this.lookups(base, gen, force, pd0);

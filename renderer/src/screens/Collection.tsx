@@ -1,10 +1,11 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { CatalogExtra, CatalogSkin, ExtraKind, OwnedFilter, SkinFilter, SkinSort } from '../../../shared/features';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { TIER_REWARD, TIER_STANDARD, type CatalogExtra, type CatalogSkin, type CatalogTier, type ExtraKind, type OwnedFilter, type PriceMap, type SkinFilter, type SkinSort } from '../../../shared/features';
 import { countSkins, extraOwned, filterExtras, filterSkins, isSkinOwned, previewVideo } from '../../../shared/collection';
 import { api } from '../lib/api';
-import { fmtNum } from '../lib/format';
+import { cx, fmtNum } from '../lib/format';
 import { img } from '../lib/media';
-import { ArrowClockwise, MagnifyingGlass, Sparkle, X } from '../lib/icons';
+import { ArrowClockwise, ArrowDown, ArrowUp, Check, Funnel, MagnifyingGlass, Sparkle, X } from '../lib/icons';
 import { countTo } from '../lib/motion';
 import { ownedSets, useCatalog, useOwned, usePreviews, usePrices } from '../lib/store';
 import { Img, OwnedMark, PriceTag, Segmented, Select, Skeleton } from '../components/ui';
@@ -50,18 +51,164 @@ function ExtraTile({ item, owned }: { item: CatalogExtra; owned: boolean | null 
   );
 }
 
+const vpOf = (prices: PriceMap) => (id: string) => {
+  const q = prices[id];
+  return (q?.kind === 'exact' || q?.kind === 'approx') && q.vp ? q.vp : undefined;
+};
+
+/** "Exclude BP" pill: on by default, hides Battle Pass / Event Pass / agent-gear rewards. */
+function BpChip({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={() => onChange(!on)}
+      title={on ? 'Battle Pass, Event Pass and agent-gear rewards are hidden. Click to show them.' : 'Hide Battle Pass, Event Pass and agent-gear rewards'}
+      className={cx('press inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-sm font-medium', on ? 'bg-white text-black' : 'bg-white/[0.08] text-muted hover:text-ink')}
+    >
+      {on && <Check size={13} weight="bold" />}
+      Exclude BP
+    </button>
+  );
+}
+
+function CheckRow({ on, label, hint, color, onClick }: { on: boolean; label: string; hint?: string; color?: string; onClick: () => void }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={on} onClick={onClick} className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm hover:bg-white/[0.07]">
+      <span className={cx('flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[6px] ring-1 ring-inset', on ? 'bg-white text-black ring-white' : 'ring-white/25')}>{on && <Check size={11} weight="bold" />}</span>
+      {color && <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />}
+      <span className="min-w-0 flex-1 truncate text-ink">{label}</span>
+      {hint && <span className="num text-xs text-faint">{hint}</span>}
+    </button>
+  );
+}
+
+/** Filters popover: sort by VP, tiers (multi), Battle Pass include/exclude. Portalled like Select. */
+function FiltersButton({ f, setF, tiers, tierCounts }: { f: SkinFilter; setF: (f: SkinFilter) => void; tiers: CatalogTier[]; tierCounts: Record<string, number> }) {
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  useEffect(() => {
+    if (!rect) return;
+    const down = (e: PointerEvent) => {
+      if (!pop.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) setRect(null);
+    };
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setRect(null);
+    const close = () => setRect(null);
+    document.addEventListener('pointerdown', down, true);
+    document.addEventListener('keydown', key, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('pointerdown', down, true);
+      document.removeEventListener('keydown', key, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [rect]);
+  const picked = new Set(f.tierIds ?? []);
+  const toggleTier = (id: string) => {
+    const n = new Set(picked);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    // Picking the rewards tier only makes sense with Battle Pass items shown.
+    setF({ ...f, tierIds: [...n], excludeBp: id === TIER_REWARD && n.has(id) ? false : f.excludeBp });
+  };
+  const active = (f.tierIds?.length ?? 0) + (f.sort === 'price-asc' || f.sort === 'price-desc' ? 1 : 0);
+  const W = 300;
+  const sorted = [...tiers].sort((a, b) => a.rank - b.rank);
+  return (
+    <>
+      <button
+        ref={btn}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={!!rect}
+        onClick={() => setRect(rect ? null : (btn.current?.getBoundingClientRect() ?? null))}
+        className={cx('press inline-flex h-9 items-center gap-2 rounded-full pl-3 pr-3.5 text-sm font-medium', active ? 'bg-white text-black' : 'bg-white/[0.08] text-ink hover:bg-white/[0.12]', rect && !active && 'bg-white/[0.14]')}
+      >
+        <Funnel size={15} weight={active ? 'fill' : 'bold'} />
+        Filters
+        {active > 0 && <span className="num rounded-full bg-black/15 px-1.5 text-xs">{active}</span>}
+      </button>
+      {rect &&
+        createPortal(
+          <div
+            ref={pop}
+            role="dialog"
+            aria-label="Filters"
+            className="material-thick pop-in fixed z-[60] max-h-[min(560px,80vh)] overflow-y-auto rounded-2xl p-2 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.9)] ring-1 ring-white/10"
+            style={{ left: Math.min(rect.left, window.innerWidth - W - 8), top: rect.bottom + 8, width: W, ['--origin' as string]: '50% 0' }}
+          >
+            <div className="px-2.5 pb-1.5 pt-1 text-xs font-medium text-faint">Price (VP)</div>
+            <div className="grid grid-cols-2 gap-1.5 px-1">
+              {(
+                [
+                  ['price-desc', 'High to low', ArrowDown],
+                  ['price-asc', 'Low to high', ArrowUp],
+                ] as const
+              ).map(([v, label, Icon]) => (
+                <button
+                  key={v}
+                  type="button"
+                  aria-pressed={f.sort === v}
+                  onClick={() => setF({ ...f, sort: f.sort === v ? 'owned' : v })}
+                  className={cx('press inline-flex h-9 items-center justify-center gap-1.5 rounded-xl text-sm font-medium', f.sort === v ? 'bg-white text-black' : 'bg-white/[0.07] text-ink hover:bg-white/[0.12]')}
+                >
+                  <Icon size={13} weight="bold" /> {label}
+                </button>
+              ))}
+            </div>
+            <div className="mx-2.5 my-2 h-px bg-white/[0.08]" />
+            <div className="flex items-center justify-between px-2.5 pb-1 pt-0.5">
+              <span className="text-xs font-medium text-faint">Tiers</span>
+              {picked.size > 0 && (
+                <button type="button" onClick={() => setF({ ...f, tierIds: [] })} className="text-xs text-muted hover:text-ink">
+                  All tiers
+                </button>
+              )}
+            </div>
+            {sorted.map((t) => (
+              <CheckRow key={t.id} on={picked.has(t.id)} label={t.name} color={t.color} hint={tierCounts[t.id] ? fmtNum(tierCounts[t.id]) : undefined} onClick={() => toggleTier(t.id)} />
+            ))}
+            <CheckRow on={picked.has(TIER_REWARD)} label="Battle Pass & rewards" hint={tierCounts[TIER_REWARD] ? fmtNum(tierCounts[TIER_REWARD]) : undefined} onClick={() => toggleTier(TIER_REWARD)} />
+            {(tierCounts[TIER_STANDARD] ?? 0) > 0 && <CheckRow on={picked.has(TIER_STANDARD)} label="Standard (free)" hint={fmtNum(tierCounts[TIER_STANDARD])} onClick={() => toggleTier(TIER_STANDARD)} />}
+            <div className="mx-2.5 my-2 h-px bg-white/[0.08]" />
+            <div className="px-2.5 pb-1.5 text-xs font-medium text-faint">Battle Pass items</div>
+            <div className="px-1 pb-1">
+              <Segmented<'exclude' | 'include'> size="sm" className="w-full [&>button]:flex-1" value={f.excludeBp ? 'exclude' : 'include'} onChange={(v) => setF({ ...f, excludeBp: v === 'exclude' })} options={[['exclude', 'Exclude'], ['include', 'Include']]} />
+            </div>
+            {active > 0 && (
+              <button type="button" onClick={() => setF({ ...f, tierIds: [], sort: 'owned' })} className="mt-1 w-full rounded-xl px-2.5 py-2 text-left text-sm text-muted hover:bg-white/[0.07] hover:text-ink">
+                Reset filters
+              </button>
+            )}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
 export function CollectionScreen() {
   const catalog = useCatalog();
   const owned = useOwned();
   const prices = usePrices();
   const [tab, setTab] = useState<Tab>('skins');
-  const [f, setF] = useState<SkinFilter>({ owned: 'all', sort: 'owned' });
+  const [f, setF] = useState<SkinFilter>({ owned: 'all', sort: 'owned', excludeBp: true });
   const sets = owned.status === 'ready' ? ownedSets(owned) : null;
   const tierBy = useMemo(() => new Map(catalog.tiers.map((t) => [t.id, t])), [catalog.tiers]);
   const weaponBy = useMemo(() => new Map(catalog.weapons.map((w) => [w.id, w])), [catalog.weapons]);
 
   const counts = useMemo(() => countSkins(catalog.skins, sets), [catalog.skins, sets]);
-  const skins = useMemo(() => filterSkins(catalog.skins, f, sets, catalog.tiers), [catalog.skins, f, sets, catalog.tiers]);
+  const skins = useMemo(() => filterSkins(catalog.skins, f, sets, catalog.tiers, vpOf(prices)), [catalog.skins, f, sets, catalog.tiers, prices]);
+  const tierCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const s of catalog.skins) {
+      const k = s.tierId ?? (s.source ? TIER_REWARD : TIER_STANDARD);
+      c[k] = (c[k] ?? 0) + 1;
+      if (s.source && s.tierId) c[TIER_REWARD] = (c[TIER_REWARD] ?? 0) + 1;
+    }
+    return c;
+  }, [catalog.skins]);
   const extrasAll = useMemo(() => (tab === 'skins' ? [] : catalog[tab === 'buddy' ? 'buddies' : tab === 'spray' ? 'sprays' : tab === 'card' ? 'cards' : 'titles']), [tab, catalog]);
   const extraSet = sets && tab !== 'skins' ? sets.extras[tab as ExtraKind] : null;
   const extras = useMemo(() => filterExtras(extrasAll, f, extraSet), [extrasAll, f, extraSet]);
@@ -78,7 +225,7 @@ export function CollectionScreen() {
   const ownedNow = tab === 'skins' ? counts.all.owned : extraOwnedCount;
   const totalNow = tab === 'skins' ? counts.all.total : extrasAll.length;
   const shown = tab === 'skins' ? skins.length : extras.length;
-  const filtered = !!(f.search || f.weaponId || f.tierId || f.themeId || f.owned !== 'all');
+  const filtered = !!(f.search || f.weaponId || f.tierId || f.tierIds?.length || f.themeId || f.owned !== 'all' || f.excludeBp);
 
   const num = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => countTo(num.current, ownedNow), [ownedNow, tab]);
@@ -146,12 +293,13 @@ export function CollectionScreen() {
           <Segmented<OwnedFilter> size="sm" value={f.owned} onChange={(o) => setF({ ...f, owned: o })} options={[['all', 'All'], ['owned', 'Owned'], ['not-owned', 'Not owned']]} />
           {tab === 'skins' && (
             <>
+              <BpChip on={!!f.excludeBp} onChange={(v) => setF({ ...f, excludeBp: v, tierIds: v ? (f.tierIds ?? []).filter((t) => t !== TIER_REWARD) : f.tierIds })} />
+              <FiltersButton f={f} setF={setF} tiers={catalog.tiers} tierCounts={tierCounts} />
               <Select
                 value={f.weaponId ?? ''}
                 onChange={(v) => setF({ ...f, weaponId: v || undefined })}
                 options={[{ value: '', label: 'All weapons' }, ...catalog.weapons.map((w) => ({ value: w.id, label: w.name, hint: sets && counts.byWeapon[w.id] ? `${counts.byWeapon[w.id].owned}/${counts.byWeapon[w.id].total}` : undefined }))]}
               />
-              <Select value={f.tierId ?? ''} onChange={(v) => setF({ ...f, tierId: v || undefined })} options={[{ value: '', label: 'All tiers' }, ...[...catalog.tiers].sort((a, b) => a.rank - b.rank).map((t) => ({ value: t.id, label: t.name }))]} />
               <Select
                 value={f.themeId ?? ''}
                 width={280}
@@ -166,6 +314,8 @@ export function CollectionScreen() {
                   { value: 'tier', label: 'Tier' },
                   { value: 'name', label: 'Name' },
                   { value: 'newest', label: 'Newest seen' },
+                  { value: 'price-desc', label: 'Price: high to low' },
+                  { value: 'price-asc', label: 'Price: low to high' },
                 ]}
               />
             </>
@@ -194,7 +344,7 @@ export function CollectionScreen() {
             <h2 className="t-head mt-3 text-lg">Nothing matches</h2>
             <p className="mt-1 text-sm text-muted">{filtered ? 'Try a different search or clear the filters.' : 'There is nothing in this list yet.'}</p>
             {filtered && (
-              <Btn className="mt-4" onClick={() => setF({ owned: 'all', sort: f.sort })}>
+              <Btn className="mt-4" onClick={() => setF({ owned: 'all', sort: f.sort, excludeBp: false })}>
                 Clear filters
               </Btn>
             )}

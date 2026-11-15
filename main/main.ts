@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, shell, Tray, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
-import type { AppState, Phase, Settings, ShopView, Toast } from '../shared/types';
+import type { AppState, MmrState, Phase, Settings, ShopView, Toast } from '../shared/types';
 import { registerSchemes, handleApp, handleAssets, handleVideos, handleLocal, videoCacheInfo, clearVideoCache, MB } from './protocol';
 import { loadSettings, getSettings, updateSettings, onSettings, publicSettings } from './settings';
 import { dataDir, readJson, writeJson } from './paths';
@@ -43,6 +43,9 @@ import { AppUpdater, RELEASES_URL } from './update';
 import { ResumeStore } from './services/resume';
 import type { ResumeFile, UiReport, UiResumeState } from '../shared/update';
 import { WarpService } from './services/warp';
+import { LineupLibrary } from './services/lineupLibrary';
+import { ReplayService, demosDir } from './services/replays';
+import { SpendingService } from './services/spending';
 
 const MOCK = process.env.MOCK === '1';
 const SHOTS = process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS;
@@ -369,6 +372,9 @@ async function startServices(): Promise<void> {
   const lifetime = new LifetimeService(api, assets, catalog, history, profiles, hiddenInMatch);
   const squad = new SquadService({ api, assets, catalog, history, names, profiles, mmr: mmrEstimate, isHidden: hiddenInMatch, livePenalty: () => loop?.partyPenalty(), onUpdate: (v) => send('mmr-team', v) });
   const hub = new HubService(api, assets, catalog, dataDir('lineups.json'), dataDir('lineups'));
+  const lineupLibrary = new LineupLibrary(dataDir('lineup-library'));
+  const replays = new ReplayService(api, assets, catalog, history, names, dataDir('replays'));
+  const spending = new SpendingService(api, catalog, dataDir('spending.json'), dataDir('fx.json'), () => send('spending', Date.now()));
   handleLocal(dataDir('lineups'));
 
   loop = new GameLoop({
@@ -535,6 +541,17 @@ async function startServices(): Promise<void> {
     'loadout:deletePreset': (id: unknown) => loadout.deletePreset(str(id, 64)),
     'profile:get': (q: unknown, queue: unknown) => profiles.profile(str(q, 64), { count: 15, queue: typeof queue === 'string' ? queue : getSettings().historyQueue }),
     'profile:match': (id: unknown) => profiles.matchDetail(str(id, 64)),
+    // Scoreboard peak ranks: one mmr lookup per player (pd limiter, 10 min cache); hidden live players skipped.
+    'profile:peaks': async (ids: unknown) => {
+      if (!Array.isArray(ids) || ids.length > 12) throw new Error('bad argument');
+      const out: Record<string, MmrState | undefined> = {};
+      await Promise.all(ids.map(async (x) => {
+        const p = str(x, 64);
+        if (hiddenInMatch(p)) return;
+        out[p] = await mmr.fetch(p).catch(() => undefined);
+      }));
+      return out;
+    },
     'mmr:get': (q: unknown, force: unknown) => mmrEstimate.get(str(q, 64), force === true),
     'mmr:chip': (p: unknown) => mmrEstimate.chip(str(p, 64)),
     'mmr:team': (q: unknown, force: unknown) => squad.get(str(q, 64), force === true),
@@ -547,12 +564,37 @@ async function startServices(): Promise<void> {
     'hub:lineups': () => hub.lineups(),
     'hub:saveLineup': (l: unknown) => hub.saveLineup(l as any),
     'hub:deleteLineup': (id: unknown) => hub.deleteLineup(str(id, 64)),
+    'lineups:library': (agent: unknown, map: unknown, force: unknown) => lineupLibrary.get(str(agent, 40), str(map, 40), force === true),
+    'spending:get': () => spending.state(),
+    'spending:add': (p: unknown) => spending.add((p ?? {}) as any),
+    'spending:remove': (id: unknown) => spending.remove(str(id, 120)),
+    'spending:refunded': (id: unknown, on: unknown) => spending.setRefunded(str(id, 120), on === true),
+    'spending:clear': () => spending.clear(),
+    'spending:battlePasses': (n: unknown) => spending.setBattlePasses(n == null ? null : Number(n)),
+    'spending:preview': (text: unknown, dayFirst: unknown) => spending.preview(str(text, 500_000), dayFirst === true),
+    'spending:commit': (rows: unknown) => spending.commit(rows as any),
+    'spending:openRiot': () => spending.openRiot(win),
+    'spending:scanRiot': (dayFirst: unknown) => spending.scanRiot(dayFirst === true),
+    'replays:list': () => replays.list(),
+    'replays:get': (id: unknown, force: unknown) => replays.get(str(id, 64), force === true),
+    'replays:reveal': async (id: unknown) => {
+      const f = id ? await replays.filePath(str(id, 64)) : null;
+      if (f) shell.showItemInFolder(f);
+      else await shell.openPath(demosDir());
+    },
+    'open:url': (u: unknown) => {
+      // Only the credited lineup source opens from here.
+      const url = new URL(str(u, 300));
+      if (url.protocol !== 'https:' || url.hostname !== 'blitz.gg') throw new Error('bad url');
+      return shell.openExternal(url.href);
+    },
     'hub:pickImage': async () => {
       const r = await dialog.showOpenDialog(win!, { properties: ['openFile'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }] });
       if (r.canceled || !r.filePaths[0]) return null;
       return hub.importImage(r.filePaths[0]);
     },
     'ui:report': (v: unknown) => resume?.report(uiReport(v)),
+    'clipboard:write': (text: unknown) => clipboard.writeText(str(text, 200)),
     'update:status': () => updater?.status,
     'update:check': () => updater?.checkNow(),
     'update:install': () => updater?.installNow(),

@@ -61,6 +61,11 @@ export function Note({ children }: { children: ReactNode }) {
   return <div className="rounded-2xl bg-white/[0.05] px-4 py-3 text-sm text-muted">{children}</div>;
 }
 
+/** Small amber "Beta" pill for features that don't work reliably yet. */
+export function BetaTag({ className }: { className?: string }) {
+  return <span className={cx('rounded-full bg-warn/[0.16] px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-warn', className)}>Beta</span>;
+}
+
 export function Untested({ what }: { what?: string }) {
   return (
     <span className="rounded-full bg-warn/[0.12] px-2.5 py-1 text-2xs font-semibold text-warn" title={what ?? 'Built from the unofficial docs; not verified against the live game'}>

@@ -8,6 +8,7 @@ import { cx } from '../lib/format';
 import { CaretDown, CircleNotch, EyeSlash, User, Users, UsersFour, UsersThree, WarningCircle } from '../lib/icons';
 import { expandTo, flipCapture } from '../lib/motion';
 import { Img, Panel } from './ui';
+import { PlayerName } from './PlayerName';
 
 const signed = (n: number, digits = 0) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(digits)}`;
 const pct = (x?: number) => (x == null ? '–' : `${Math.round(x * 100)}%`);
@@ -234,10 +235,11 @@ function SquadCard({ r, youTier }: { r: SquadRowView; youTier: number }) {
         <Avatar r={r} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="min-w-0 truncate text-md font-semibold text-ink" title={r.hidden ? undefined : `${name}${r.tag ? `#${r.tag}` : ''}`}>
-              {name}
-              {!r.hidden && r.tag && <span className="font-normal text-faint">#{r.tag}</span>}
-            </span>
+            {r.hidden || !r.name ? (
+              <span className="min-w-0 truncate text-md font-semibold text-ink">{name}</span>
+            ) : (
+              <PlayerName name={r.name} tag={r.tag} className="min-w-0 truncate text-md font-semibold text-ink" tagClassName="font-normal text-faint" />
+            )}
             {r.rank && <Img src={r.rank.icon} alt={r.rank.name} title={`Their rank: ${r.rank.name}`} className="h-6 w-6 shrink-0" />}
             {r.estRank && (
               <span className="flex shrink-0 items-center gap-1 text-xs text-muted" title="Their estimated MMR (our own estimate)">
@@ -263,14 +265,19 @@ function SquadCard({ r, youTier }: { r: SquadRowView; youTier: number }) {
               </>
             )}
           </div>
-          {!r.eligible && r.games >= 3 && r.without.games < 3 && <div className="mt-1 text-xs text-faint">In nearly every match with you: too few games without them to compare against.</div>}
+          {!r.eligible && <div className="mt-1 text-xs text-faint">{r.games} of 3 games needed to rank them.</div>}
+          {r.eligible && r.thinBaseline && (
+            <div className="mt-1 text-xs text-faint">
+              In nearly every match with you ({r.without.games} without them), so “with vs without” is left out; ranked on the adjusted impact, their play in your losses and the MMR gap.
+            </div>
+          )}
           {r.eligible && (
             <div className="mt-4 grid grid-cols-3 gap-6">
               <Metric label="Adjusted impact" value={r.beta != null ? `${signed(r.beta, 1)} RR/game` : '–'} hint="Ridge regression over your window: your RR per game with them, other premades, 5-stacks and lobby difficulty held fixed (our own estimate).">
                 <Diverging value={r.beta} />
               </Metric>
-              <Metric label="With vs without" value={r.shrunkDelta != null ? `${signed(r.shrunkDelta, 1)} RR/game` : '–'} hint={`Your RR per game with them minus without them, shrunk for small samples (× n / (n + 5)). Thin line: 80% interval${r.interval ? ` (${signed(r.interval[0], 1)} to ${signed(r.interval[1], 1)})` : ''}.`}>
-                <Diverging value={r.shrunkDelta} lo={r.interval?.[0]} hi={r.interval?.[1]} />
+              <Metric label="With vs without" value={r.thinBaseline ? 'too few without' : r.shrunkDelta != null ? `${signed(r.shrunkDelta, 1)} RR/game` : '–'} hint={`Your RR per game with them minus without them, shrunk for small samples (× n / (n + 5)). Thin line: 80% interval${r.interval ? ` (${signed(r.interval[0], 1)} to ${signed(r.interval[1], 1)})` : ''}.`}>
+                <Diverging value={r.thinBaseline ? undefined : r.shrunkDelta} lo={r.thinBaseline ? undefined : r.interval?.[0]} hi={r.thinBaseline ? undefined : r.interval?.[1]} />
               </Metric>
               <Metric label="In your losses" value={r.them.meanZLosses != null ? `ACS z ${signed(r.them.meanZLosses, 2)}` : 'no losses'} hint="Their ACS against the whole lobby in the games you lost together (z-score: 0 = lobby average), and how often they had the lowest ACS on your team in those losses.">
                 <div className="flex items-center gap-2">
@@ -358,7 +365,7 @@ export function SquadList({ rows, randoms, settled, youTier }: { rows: SquadRowV
     <section data-squad>
       <div className="mb-3 flex items-baseline justify-between gap-4">
         <h2 className="t-head text-lg text-ink">Squad</h2>
-        <span className="text-xs text-faint">{settled ? 'Ranked by estimated RR cost · 3+ games to be ranked' : 'Looking up your regulars…'}</span>
+        <span className="text-xs text-faint">{settled ? 'Ranked by estimated RR cost · 3+ games together to be ranked' : 'Looking up your regulars…'}</span>
       </div>
       <Panel>
         <div ref={list}>

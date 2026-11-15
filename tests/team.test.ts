@@ -301,7 +301,7 @@ describe('shared/team: stack breakdown and squad report', () => {
     expect(d.them.acs).toBe(150);
   });
 
-  it('a premade in nearly every match is listed but not ranked: no games without them to compare', () => {
+  it('a premade in nearly every match is still ranked, without the with/without part', () => {
     const w = squadWindow().map((m, i) => {
       if (m.tf!.premades.some((p) => p.puuid === 'N') || i >= 22) return m;
       const tf = { ...m.tf!, premades: [...m.tf!.premades, { ...m.tf!.randoms[0], puuid: 'N', premade: true }], randoms: m.tf!.randoms.slice(1) };
@@ -309,7 +309,10 @@ describe('shared/team: stack breakdown and squad report', () => {
     });
     const n = buildSquad({ matches: w, you: { puuid: ME, tier: 14 } }).squad.find((r) => r.puuid === 'N')!;
     expect(n.without.games).toBeLessThan(3);
-    expect(n).toMatchObject({ eligible: false, verdict: 'not enough games' });
+    expect(n.games).toBeGreaterThanOrEqual(3);
+    expect(n).toMatchObject({ eligible: true, thinBaseline: true });
+    expect(n.verdict).not.toBe('not enough games');
+    expect(n.drainParts!.delta).toBe(0);
   });
 
   it('matches without party data are left out of every squad number', () => {

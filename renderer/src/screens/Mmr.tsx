@@ -11,6 +11,7 @@ import { Img, Panel, Segmented, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, PageHeader } from '../components/kit';
 import { MultiLineChart, SERIES, STACK_RAMP } from '../components/charts';
 import { SquadList, STACK_LABEL, StackIcon, StackTiles } from '../components/squad';
+import { PlayerName } from '../components/PlayerName';
 
 const when = (t: number) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const signed = (n: number) => `${n > 0 ? '+' : ''}${n}`;
@@ -284,8 +285,7 @@ function Headline({ v, badge, children }: { v: MmrView; badge?: string; children
           <div>
             {!v.isMe && (
               <div className="text-sm text-muted">
-                {v.name ?? 'Player'}
-                {v.tag ? <span className="text-faint">#{v.tag}</span> : null}
+                <PlayerName name={v.name} tag={v.tag} fallback="Player" />
               </div>
             )}
             <div className="t-title mt-0.5 text-[34px] leading-none text-ink">{e.usable ? `Estimated MMR · ${tierName(e.estTier)}` : 'No estimate yet'}</div>

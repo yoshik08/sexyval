@@ -1,4 +1,4 @@
-import type { CatalogExtra, CatalogSkin, CatalogTier, SkinFilter } from './features';
+import { TIER_REWARD, TIER_STANDARD, type CatalogExtra, type CatalogSkin, type CatalogTier, type SkinFilter } from './features';
 
 /**
  * Parses Owned Items. Docs (valorant-api-types OwnedItems.ts) give
@@ -62,11 +62,23 @@ export function tierRank(tiers: CatalogTier[], tierId?: string): number {
   return tiers.find((t) => t.id === tierId)?.rank ?? -1;
 }
 
-export function filterSkins(skins: CatalogSkin[], f: SkinFilter, owned: OwnedSets | null, tiers: CatalogTier[]): CatalogSkin[] {
+/** The tier-filter key of a skin: its content tier, else TIER_REWARD for contract rewards, else TIER_STANDARD. */
+export function tierKey(s: Pick<CatalogSkin, 'tierId' | 'source'>): string {
+  return s.tierId ?? (s.source ? TIER_REWARD : TIER_STANDARD);
+}
+
+/**
+ * `priceOf` gives a skin's VP (exact or approximate) for the price sorts; skins without one (rewards,
+ * unknown) go last in both directions.
+ */
+export function filterSkins(skins: CatalogSkin[], f: SkinFilter, owned: OwnedSets | null, tiers: CatalogTier[], priceOf: (id: string) => number | undefined = () => undefined): CatalogSkin[] {
   const q = (f.search ?? '').trim().toLowerCase();
+  const tierSet = f.tierIds?.length ? new Set(f.tierIds) : null;
   const out = skins.filter((s) => {
+    if (f.excludeBp && s.source) return false;
     if (f.weaponId && s.weaponId !== f.weaponId) return false;
     if (f.tierId && s.tierId !== f.tierId) return false;
+    if (tierSet && !tierSet.has(tierKey(s)) && !(s.source && tierSet.has(TIER_REWARD))) return false;
     if (f.themeId && s.themeId !== f.themeId) return false;
     if (q && !s.name.toLowerCase().includes(q)) return false;
     if (owned && f.owned !== 'all') {
@@ -81,6 +93,16 @@ export function filterSkins(skins: CatalogSkin[], f: SkinFilter, owned: OwnedSet
   if (f.sort === 'owned') out.sort((x, y) => Number(owned ? isSkinOwned(y, owned) : 0) - Number(owned ? isSkinOwned(x, owned) : 0) || byTier(x, y));
   else if (f.sort === 'name') out.sort(byName);
   else if (f.sort === 'tier') out.sort(byTier);
+  else if (f.sort === 'price-desc' || f.sort === 'price-asc') {
+    const dir = f.sort === 'price-desc' ? -1 : 1;
+    const vp = new Map(out.map((s) => [s.id, priceOf(s.id)]));
+    out.sort((x, y) => {
+      const a = vp.get(x.id);
+      const b = vp.get(y.id);
+      if (a == null || b == null) return a == null && b == null ? byTier(x, y) : a == null ? 1 : -1;
+      return (a - b) * dir || byName(x, y);
+    });
+  }
   // "newest": no release date exists in the catalog. Stand-in: first time SexyVal saw the
   // skin, then catalog order (newer skins tend to be listed first per weapon).
   else out.sort((a, b) => b.firstSeen - a.firstSeen || a.order - b.order);
