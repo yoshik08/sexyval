@@ -42,6 +42,7 @@ import type { MockHandle, MockPhase } from '../mock/server';
 import { AppUpdater, RELEASES_URL } from './update';
 import { ResumeStore } from './services/resume';
 import type { ResumeFile, UiReport, UiResumeState } from '../shared/update';
+import { WarpService } from './services/warp';
 
 const MOCK = process.env.MOCK === '1';
 const SHOTS = process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS;
@@ -627,6 +628,13 @@ function registerIpc(): void {
     if (!mock) return;
     mock.setPhase(p as any, p === 'pregame' ? 15_000 : 0);
     loop?.pollNow();
+  });
+  // Cloudflare WARP through the official warp-cli (sidebar row). Real machine state in every mode.
+  const warp = new WarpService({ onStatus: (s) => send('warp', s) });
+  Object.assign(rpc, {
+    'warp:status': () => warp.refresh(),
+    'warp:set': (on: unknown) => warp.set(on === true),
+    'warp:install': () => warp.installWarp(),
   });
   handle('rpc', async (method: unknown, args: unknown) => {
     if (typeof method !== 'string' || !Object.prototype.hasOwnProperty.call(rpc, method)) throw new Error(`unknown rpc ${String(method)}`);

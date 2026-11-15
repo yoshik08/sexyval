@@ -10,6 +10,7 @@ import { MmrScreen } from './screens/Mmr';
 import { Toasts } from './components/ui';
 import { closeSkin, SkinDetail } from './components/SkinDetail';
 import { Btn } from './components/kit';
+import { WarpRow } from './components/warp';
 import { LiveScreen } from './screens/Live';
 import { ShopScreen } from './screens/Shop';
 import { SettingsScreen } from './screens/Settings';
@@ -145,7 +146,10 @@ function Sidebar({ view, go, conn }: { view: View; go: (v: View) => void; conn?:
             {g.map(item)}
           </div>
         ))}
-        <div className="mt-auto flex flex-col gap-0.5">{item(SETTINGS)}</div>
+        <div className="mt-auto flex flex-col gap-0.5">
+          <WarpRow />
+          {item(SETTINGS)}
+        </div>
       </div>
       <div className="mt-3">
         <ConnectionPill conn={conn} />

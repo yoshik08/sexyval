@@ -99,4 +99,5 @@ export {
   ArrowUUpLeftIcon as ArrowUUpLeft,
   ArrowRightIcon as ArrowRight,
   ArrowSquareOutIcon as ArrowSquareOut,
+  CloudIcon as Cloud,
 } from '@phosphor-icons/react';
