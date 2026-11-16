@@ -47,7 +47,8 @@ import { LineupLibrary } from './services/lineupLibrary';
 import { ReplayService, demosDir } from './services/replays';
 import { SpendingService } from './services/spending';
 import { EncounterService } from './services/encounters';
-import { makeBackup, restoreBackup } from './services/backup';
+import { VaultService } from './services/vault';
+import { writeListeners } from './paths';
 import { computeHealth, type HealthReport } from '../shared/health';
 
 const MOCK = process.env.MOCK === '1';
@@ -100,6 +101,17 @@ let resumed: ResumeFile | null = null;
 let updater: AppUpdater | null = null;
 let healthNow: () => HealthReport = () => ({ overall: 'connecting', summary: 'Starting', items: [] });
 let pushHealth: () => void = () => undefined;
+let vault: VaultService | null = null;
+let recoveredNote = '';
+
+function relaunchSoon(msg: string): void {
+  toast('info', msg);
+  setTimeout(() => {
+    quitting = true;
+    app.relaunch();
+    app.exit(0);
+  }, 1500);
+}
 
 /** Side calibration was removed (the rule is hardcoded now); delete what it stored. Nothing to do once gone. */
 async function removeOldCalibrationData(): Promise<void> {
@@ -311,6 +323,20 @@ async function startServices(): Promise<void> {
   const archive = new StoreArchive(dataDir());
   await archive.load();
   beforeQuit.push(() => archive.flush());
+  // Last vault snapshot on the way out (beforeQuit is capped at 8 s overall).
+  beforeQuit.push(async () => {
+    await vault?.snapshot('quit');
+  });
+  // A snapshot soon after start when the last one is old (or there is none yet), then the reminder.
+  setTimeout(() => {
+    void (async () => {
+      if (!vault) return;
+      const st = await vault.status();
+      if (!st.lastSnapshotAt || Date.now() - st.lastSnapshotAt > 6 * 60 * 60_000) await vault.snapshot('startup');
+      if (vault.reminderDue()) send('vault-tip', { location: vault.root });
+      pushHealth();
+    })();
+  }, 45_000).unref?.();
   if (MOCK) {
     const { mockShopHistory } = await import('../mock/shopSeed');
     archive.seedDays(mockShopHistory());
@@ -437,6 +463,7 @@ async function startServices(): Promise<void> {
       accounts: (accounts?.list() ?? []).map((a) => ({ label: `${a.name ?? '?'}#${a.tag ?? '?'}`, status: a.status, retryAt: a.retryAt })),
       accountsReadOnly: accounts?.storageReadOnly ?? false,
       pinned: getSettings().accountMode === 'pinned' && session.tokenSource === 'signin',
+      vault: vault ? { ...vault.quickHealth(), now: Date.now() } : undefined,
     });
   };
   pushHealth = () => {
@@ -629,26 +656,32 @@ async function startServices(): Promise<void> {
       await names.waitFor(list.map((e) => e.puuid), 2500);
       return list.map((e) => ({ ...e, name: names.get(e.puuid)?.name, tag: names.get(e.puuid)?.tag, agentIcon: assets.agent(e.lastAgent)?.icon, mapName: assets.mapName(e.lastMap) }));
     },
-    'backup:export': async () => {
-      const r = await dialog.showSaveDialog(win!, { title: 'Back up SexyVal', defaultPath: `SexyVal-backup-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: 'SexyVal backup', extensions: ['json'] }] });
+    // Vault (Settings > Data & Recovery). Restores overwrite data files, then relaunch with app.exit so no
+    // in-memory copy (settings, window bounds) is written back over what was just restored.
+    'vault:status': () => vault?.status(),
+    'vault:snapshot': async () => (await vault?.snapshot('auto'), vault?.status()),
+    'vault:openFolder': () => (vault ? shell.openPath(vault.root) : undefined),
+    'vault:reminders': async (on: unknown) => (await vault?.setReminders(on === true), vault?.status()),
+    'vault:reminderSeen': (disable: unknown) => vault?.reminderSeen(disable === true),
+    'vault:export': async (withMatches: unknown) => {
+      if (!vault) throw new Error('Vault unavailable');
+      const r = await dialog.showSaveDialog(win!, { title: 'Export SexyVal data', defaultPath: `SexyVal-${new Date().toISOString().slice(0, 10)}.sxyval`, filters: [{ name: 'SexyVal vault', extensions: ['sxyval'] }] });
       if (r.canceled || !r.filePath) return null;
-      const b = await makeBackup(dataDir, getSettings());
-      await fsp.writeFile(r.filePath, JSON.stringify(b, null, 1));
-      return { path: r.filePath, files: Object.keys(b.files).length };
+      return { path: r.filePath, size: await vault.exportTo(r.filePath, withMatches === true) };
     },
-    'backup:import': async () => {
-      const r = await dialog.showOpenDialog(win!, { title: 'Restore a SexyVal backup', properties: ['openFile'], filters: [{ name: 'SexyVal backup', extensions: ['json'] }] });
+    'vault:import': async () => {
+      if (!vault) throw new Error('Vault unavailable');
+      const r = await dialog.showOpenDialog(win!, { title: 'Restore SexyVal data', properties: ['openFile'], filters: [{ name: 'SexyVal vault or backup', extensions: ['sxyval', 'json'] }] });
       if (r.canceled || !r.filePaths[0]) return null;
-      const { settings, restored } = await restoreBackup(dataDir, await fsp.readFile(r.filePaths[0], 'utf8'));
-      updateSettings(settings);
-      toast('info', `Restored ${restored.length} file${restored.length === 1 ? '' : 's'}. Restarting…`);
-      // Services read their files at start: a relaunch picks everything up.
-      setTimeout(() => {
-        quitting = true;
-        app.relaunch();
-        app.exit(0);
-      }, 1500);
-      return { restored };
+      const res = await vault.importFile(r.filePaths[0]);
+      relaunchSoon(`Restored ${res.count} item${res.count === 1 ? '' : 's'}. Restarting…`);
+      return res;
+    },
+    'vault:restore': async (name: unknown) => {
+      if (!vault) throw new Error('Vault unavailable');
+      const n = await vault.restoreVersion(str(name, 120));
+      relaunchSoon(`Restored ${n} item${n === 1 ? '' : 's'} from the vault. Restarting…`);
+      return n;
     },
     'spending:csv': async (csv: unknown) => {
       const r = await dialog.showSaveDialog(win!, { title: 'Export purchases', defaultPath: `SexyVal-purchases-${new Date().toISOString().slice(0, 10)}.csv`, filters: [{ name: 'CSV', extensions: ['csv'] }] });
@@ -814,6 +847,20 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     nativeTheme.themeSource = 'dark';
     app.setAppUserModelId(APP_ID);
+    // Vault first: after a reinstall or a lost file, bring back what's missing before anything reads it.
+    // Mock runs keep their own vault so they never touch the real one.
+    if (!process.argv.includes('--sexyval-uninstall')) {
+      try {
+        vault = new VaultService(dataDir, app.getVersion(), MOCK ? dataDir('Vault') : undefined);
+        await vault.init();
+        const rec = await vault.recoverMissing();
+        if (rec.restored.length) recoveredNote = `Restored ${rec.restored.length} missing item${rec.restored.length === 1 ? '' : 's'} from your SexyVal vault`;
+        writeListeners.add((f) => vault?.covers(f) && vault.markDirty());
+      } catch (e) {
+        log.error('vault unavailable', e);
+        vault = null;
+      }
+    }
     await loadSettings();
     // Run by the NSIS uninstaller (build/installer.nsh): undo Stretch and Boost, remove the helper task, exit.
     if (process.argv.includes('--sexyval-uninstall')) {
@@ -829,6 +876,7 @@ if (!app.requestSingleInstanceLock()) {
     handleVideos({ dir: dataDir('videos'), cacheEnabled: () => getSettings().cacheVideos && !quiet, maxBytes: () => getSettings().videoCacheMaxMb * MB });
     registerIpc();
     win = createWindow();
+    if (recoveredNote) win.webContents.once('did-finish-load', () => toast('info', recoveredNote));
     applyAppIcon(win, getSettings().appIcon, iconPath()); // re-apply the saved choice (shortcuts may have been recreated by an update)
     if (resumed) {
       const r = resumed;

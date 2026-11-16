@@ -580,6 +580,23 @@ export interface LineupLibraryView {
   mapArt?: LineupMapArt;
 }
 
+// ---------- Vault ----------
+
+export interface VaultStatus {
+  location: string;
+  /** ok: current snapshot valid. none: no snapshot yet. recovered: current missing/broken but an older one is valid. corrupt: nothing valid. */
+  health: 'ok' | 'none' | 'recovered' | 'corrupt';
+  error?: string;
+  lastSnapshotAt?: number;
+  size?: number;
+  matchesMirrored: number;
+  matchCount?: number;
+  versions: { name: string; createdAt: number; size: number; ok: boolean; reason?: string; appVersion?: string; error?: string }[];
+  reminders: boolean;
+  recoveredAt?: number;
+  recoveredFiles?: number;
+}
+
 // ---------- Encounters ----------
 
 /** You and another player in the same cached matches (from your side). */

@@ -13,6 +13,7 @@ import { Btn } from './components/kit';
 import { WarpRow } from './components/warp';
 import { CommandPalette, type PaletteNav } from './components/CommandPalette';
 import { WhatsNew } from './components/WhatsNew';
+import { VaultTip } from './screens/DataRecovery';
 import { HealthPanel, useHealth } from './components/HealthPanel';
 import { LiveScreen } from './screens/Live';
 import { ShopScreen } from './screens/Shop';
@@ -66,6 +67,7 @@ const PALETTE: PaletteNav[] = [
   { label: 'Stretch', hint: 'Settings', view: 'settings', sub: 'stretch' },
   { label: 'Boost', hint: 'Settings', view: 'settings', sub: 'boost' },
   { label: 'Diagnostics', hint: 'Settings', view: 'settings', sub: 'debug' },
+  { label: 'Data & Recovery (vault, backup)', hint: 'Settings', view: 'settings', sub: 'data' },
 ];
 
 function Wordmark() {
@@ -376,6 +378,7 @@ export function App() {
       )}
       <CommandPalette open={palette} onClose={() => setPalette(false)} navs={PALETTE} go={(v, t) => go(v as View, t)} openPlayer={openPlayer} />
       <WhatsNew />
+      <VaultTip />
       <Toasts />
     </div>
   );

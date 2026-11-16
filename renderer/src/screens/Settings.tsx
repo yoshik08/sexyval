@@ -4,16 +4,18 @@ import type { AccountInfo, OffersStatus } from '../../../shared/features';
 import { api } from '../lib/api';
 import { ago, cx, fmtBytes } from '../lib/format';
 import { saveSettings, useSettings } from '../lib/store';
-import { Panel, Segmented, Select, showToast, Toggle } from '../components/ui';
+import { Panel, Segmented, Select, Toggle } from '../components/ui';
 import { WarningCircle } from '../lib/icons';
-import { act, Bar, BetaTag, Btn, Note, PageHeader } from '../components/kit';
+import { Bar, BetaTag, Btn, Note, PageHeader } from '../components/kit';
 import { BoostTab, StretchTab } from './SystemSettings';
+import { DataRecoveryTab } from './DataRecovery';
 import { PlayerName } from '../components/PlayerName';
 
-type Tab = 'general' | 'accounts' | 'stretch' | 'boost' | 'debug';
+type Tab = 'general' | 'accounts' | 'data' | 'stretch' | 'boost' | 'debug';
 const TABS: [Tab, ReactNode][] = [
   ['general', 'General'],
   ['accounts', 'Accounts'],
+  ['data', 'Data & Recovery'],
   [
     'stretch',
     <span key="s" className="inline-flex items-center gap-1.5">
@@ -33,6 +35,7 @@ export function SettingsScreen({ state, initialTab }: { state: AppState | null; 
       <Segmented value={tab} options={TABS} onChange={setTab} className="mb-8" />
       {tab === 'general' && <General state={state} />}
       {tab === 'accounts' && <Accounts state={state} />}
+      {tab === 'data' && <DataRecoveryTab />}
       {tab === 'stretch' && <StretchTab />}
       {tab === 'boost' && <BoostTab />}
       {tab === 'debug' && <Debug />}
@@ -170,29 +173,6 @@ function General({ state }: { state: AppState | null }) {
 
       <Updates s={s} set={set} />
 
-      <Group title="Backup" note="Your wishlist, saved lineups, purchases, watched friends, loadout presets, store history and settings, in one file. Riot sign-ins and your HenrikDev key are never included.">
-        <div className="flex flex-wrap gap-2 py-4">
-          <Btn
-            onClick={async () => {
-              const r = await act<{ path: string; files: number } | null>('backup:export');
-              if (r.ok && r.data) showToast(`Backup saved (${r.data.files} files)`);
-              else if (!r.ok) showToast(r.error, 'error');
-            }}
-          >
-            Export backup…
-          </Btn>
-          <Btn
-            tone="ghost"
-            onClick={async () => {
-              if (!window.confirm('Restoring replaces your current wishlist, lineups, purchases and settings with the backup, then restarts SexyVal. Continue?')) return;
-              const r = await act('backup:import');
-              if (!r.ok) showToast(r.error, 'error');
-            }}
-          >
-            Restore from file…
-          </Btn>
-        </div>
-      </Group>
 
       <Group title="Agent select overlay" note="A small always-on-top window, nothing more: no injection, no memory reading, no screen capture. It never takes focus and clicks pass through it. It shows only the map and your starting side, only during agent select.">
         {displayMode === 'fullscreen' && s.overlayEnabled && (

@@ -62,6 +62,11 @@ export function HealthPanel({ h, onClose, onSettings }: { h: HealthReport; onClo
         <Btn size="sm" onClick={() => void reconnect()} disabled={busy}>
           Reconnect
         </Btn>
+        {h.items.some((i) => i.action === 'open-vault') && (
+          <Btn size="sm" tone="ghost" onClick={() => void api.rpc('vault:openFolder')}>
+            Vault folder
+          </Btn>
+        )}
         {h.items.some((i) => i.action === 'sign-in' || i.action === 'retry-accounts') && (
           <Btn size="sm" tone="ghost" onClick={onSettings}>
             Accounts…

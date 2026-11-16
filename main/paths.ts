@@ -38,6 +38,9 @@ export async function writeJsonWithBackup(file: string, data: unknown): Promise<
   await writeJson(file, data);
 }
 
+/** Told about every successful writeJson (the vault marks itself dirty for the files it covers). */
+export const writeListeners = new Set<(file: string) => void>();
+
 let tmpSeq = 0;
 const queues = new Map<string, Promise<void>>();
 
@@ -52,6 +55,7 @@ export function writeJson(file: string, data: unknown): Promise<void> {
     const tmp = `${file}.${process.pid}.${++tmpSeq}.tmp`;
     await fs.writeFile(tmp, text);
     await fs.rename(tmp, file);
+    for (const l of writeListeners) l(file);
   };
   const next = (queues.get(file) ?? Promise.resolve()).catch(() => undefined).then(run);
   queues.set(file, next);

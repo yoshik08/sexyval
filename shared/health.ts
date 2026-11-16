@@ -4,12 +4,12 @@
 export type HealthState = 'healthy' | 'connecting' | 'degraded' | 'offline' | 'auth-required' | 'error';
 
 export interface HealthItem {
-  id: 'riot-client' | 'auth' | 'events' | 'accounts' | 'storage';
+  id: 'riot-client' | 'auth' | 'events' | 'accounts' | 'storage' | 'vault';
   label: string;
   state: HealthState;
   detail: string;
   /** What the user can do about it, when anything. */
-  action?: 'reconnect' | 'sign-in' | 'retry-accounts' | 'start-riot-client';
+  action?: 'reconnect' | 'sign-in' | 'retry-accounts' | 'start-riot-client' | 'open-vault';
 }
 
 export interface HealthInput {
@@ -24,6 +24,8 @@ export interface HealthInput {
   accountsReadOnly: boolean;
   /** The current account came from a pinned saved sign-in. */
   pinned: boolean;
+  /** Vault: absent when unavailable (e.g. tests). */
+  vault?: { lastSnapshotAt?: number; error?: string; now: number };
 }
 
 export interface HealthReport {
@@ -79,6 +81,17 @@ export function computeHealth(h: HealthInput): HealthReport {
   }
   items.push(h.accountsReadOnly ? { id: 'storage', label: 'Account storage', state: 'error', detail: 'accounts.json couldn’t be read, so SexyVal won’t overwrite it. Restart SexyVal; if it persists, restore a backup.' } : { id: 'storage', label: 'Account storage', state: 'healthy', detail: 'Saved' });
 
+  if (h.vault) {
+    const v = h.vault;
+    const age = v.lastSnapshotAt ? v.now - v.lastSnapshotAt : Infinity;
+    items.push(
+      v.error
+        ? { id: 'vault', label: 'Data vault', state: 'degraded', detail: `Last snapshot failed: ${v.error}. Your previous snapshot is kept.`, action: 'open-vault' }
+        : !v.lastSnapshotAt
+          ? { id: 'vault', label: 'Data vault', state: 'connecting', detail: 'First snapshot is taken shortly after start' }
+          : { id: 'vault', label: 'Data vault', state: age > 3 * 24 * 60 * 60_000 ? 'degraded' : 'healthy', detail: `Last snapshot ${Math.max(1, Math.round(age / 60_000)) < 120 ? `${Math.max(1, Math.round(age / 60_000))} min` : `${Math.round(age / 3_600_000)} h`} ago` },
+    );
+  }
   // Overall: what the user is actually blocked by.
   const core = items.filter((i) => i.id === 'auth' || i.id === 'storage');
   let overall = core.reduce((w, i) => (RANK[i.state] > RANK[w] ? i.state : w), 'healthy' as HealthState);
