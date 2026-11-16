@@ -326,7 +326,7 @@ export interface Toast {
   at: number;
 }
 
-export type View = 'live' | 'shop' | 'collection' | 'progress' | 'party' | 'loadout' | 'profiles' | 'mmr' | 'hub' | 'lineups' | 'replays' | 'settings';
+export type View = 'live' | 'shop' | 'collection' | 'progress' | 'party' | 'loadout' | 'profiles' | 'mmr' | 'hub' | 'lineups' | 'replays' | 'mastery' | 'settings';
 
 export interface SexyValApi {
   getState(): Promise<AppState>;

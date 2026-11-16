@@ -37,6 +37,11 @@ export interface VaultPayload {
   files: Partial<Record<VaultFile, unknown>>;
   /** Per-player competitive updates (MMR history): mmr-updates/<puuid>.json. */
   mmrUpdates: Record<string, unknown>;
+  /**
+   * Per-account Agent Mastery snapshots: mastery/<puuid>.json. Optional, so schema-1 files from before it
+   * existed still read (an older SexyVal drops it on import).
+   */
+  mastery?: Record<string, unknown>;
   /** Full exports only: cached match details (matches/<id>.v2.json). Snapshots keep matches beside the file. */
   matches?: Record<string, unknown>;
   /** How many cached matches existed when this was taken (snapshots: they live in the vault's match mirror). */
@@ -89,6 +94,10 @@ export function sanitizePayload(p: any): VaultPayload {
     out.files['settings.json'] = clean;
   }
   for (const [k, v] of Object.entries(p.mmrUpdates ?? {})) if (ID_FILE.test(k)) out.mmrUpdates[k] = v;
+  if (p.mastery && typeof p.mastery === 'object') {
+    out.mastery = {};
+    for (const [k, v] of Object.entries(p.mastery)) if (ID_FILE.test(k) && v && typeof v === 'object') out.mastery[k] = v;
+  }
   if (p.matches && typeof p.matches === 'object') {
     out.matches = {};
     for (const [k, v] of Object.entries(p.matches)) if (MATCH_FILE.test(k)) out.matches[k] = v;

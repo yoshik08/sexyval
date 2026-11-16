@@ -55,6 +55,8 @@ import { httpRequest } from './riot/http';
 import { WishlistStore } from './services/wishlist';
 import { DiscordPresence } from './services/discord';
 import { WarehouseService } from './services/warehouse';
+import { MasteryService } from './services/mastery';
+import type { ActRef, AgentMeta } from '../shared/mastery';
 import { liteActive, PerfSampler } from './services/perf';
 import type { NetworkStatus, PerfStatus } from '../shared/features';
 import type { Act } from '../shared/warehouse';
@@ -477,6 +479,39 @@ async function startServices(): Promise<void> {
     if (p) deferWhileLite('warehouse', () => void warehouse.ingest(p, true).catch((e) => log.warn(`warehouse ingest (${why}) failed`, e)));
   };
   setInterval(() => ingestSoon('timer'), 15 * 60_000).unref?.();
+  // ---- Agent Mastery (Riot's "Bloomline" pd endpoint; read-only) ----
+  const currentAct = (): ActRef | null => {
+    const now = Date.now();
+    return acts().find((a) => a.start <= now && now < a.end) ?? null;
+  };
+  const masteryAgents = (): AgentMeta[] =>
+    (catalog.browse.agents ?? []).map((a: any) => ({ id: a.id, name: a.name, role: a.role, roleIcon: a.roleIcon, icon: a.icon, portrait: a.portrait, background: a.background, colors: a.colors }));
+  const mastery = new MasteryService({
+    api,
+    dir: dataDir('mastery'),
+    activePuuid: () => session.puuid,
+    agents: masteryAgents,
+    currentAct,
+    onUpdate: (v) => send('mastery', v),
+    owned: (p) => {
+      const s = owned.state;
+      if (owned.account !== p || s.status !== 'ready') return null;
+      return { at: s.fetchedAt, ids: { sprays: new Set(s.sprays), cards: new Set(s.cards), titles: new Set(s.titles), buddies: new Set(s.buddies), skins: new Set(s.levels) } };
+    },
+    gearLevels: (id) => catalog.browse.contracts.find((c: any) => c.relationType === 'Agent' && c.relationId === id)?.levels ?? [],
+    resolveItem: (type, id) => catalog.rewardName(type, id),
+    masteryCard: (id) => {
+      const dev = catalog.browse.agents.find((a: any) => a.id === id)?.developerName;
+      const cardId = dev ? catalog.browse.masteryCards?.[String(dev).toLowerCase()] : undefined;
+      const card = cardId ? catalog.catalog.cards.find((c) => c.id === cardId) : undefined;
+      return cardId ? { type: 'card', id: cardId, name: card?.name ?? 'Mastery card', icon: card?.icon, art: card?.large ?? card?.icon } : undefined;
+    },
+    rows: (p) => warehouse.ingest(p).then((f) => f.rows),
+  });
+  const masterySoon = (why: string) => {
+    const p = session.puuid;
+    if (p) deferWhileLite('mastery', () => void mastery.refresh(p).catch((e) => log.warn(`mastery refresh (${why}) failed`, e)));
+  };
   const discord = new DiscordPresence(() => ({ enabled: getSettings().discordEnabled, clientId: getSettings().discordClientId, privacy: getSettings().discordPrivacy }), () => pushHealth());
   beforeQuit.push(async () => discord.shutdown());
   discord.apply();
@@ -502,7 +537,11 @@ async function startServices(): Promise<void> {
     emit: (s: AppState) => {
       send('state', s);
       if (s.phase !== presencePhase) {
-        if (presencePhase === 'ingame' && s.phase !== 'ingame') setTimeout(() => ingestSoon('match end'), 90_000).unref?.();
+        if (presencePhase === 'ingame' && s.phase !== 'ingame') {
+          setTimeout(() => ingestSoon('match end'), 90_000).unref?.();
+          // Riot grants MP once the match is processed; ask again a little later.
+          setTimeout(() => masterySoon('match end'), 120_000).unref?.();
+        }
         presencePhase = s.phase;
         phaseSince = s.phase === 'queue' && s.queue?.enteredAt ? s.queue.enteredAt : Date.now();
       }
@@ -521,6 +560,7 @@ async function startServices(): Promise<void> {
       owned.ensure(puuid);
       send('wishlist', wishlist.ids(puuid));
       ingestSoon('account');
+      masterySoon('account');
       void storeSync?.syncOthers('tokens');
     },
     onNoTokens: () => {
@@ -671,6 +711,24 @@ async function startServices(): Promise<void> {
     'discord:reconnect': () => {
       discord.reconnect();
       return discord.status;
+    },
+    // ---- Agent Mastery. The renderer names the account it shows: a mismatch means it switched. ----
+    'mastery:get': (puuid: unknown) => {
+      const p = session.puuid;
+      if (!p) return mastery.snapshot(str(puuid, 40)); // no session: the saved copy only
+      if (puuid !== p) throw new Error('account changed');
+      return mastery.get(p);
+    },
+    'mastery:refresh': (puuid: unknown) => {
+      const p = session.puuid;
+      if (!p) throw new Error('Not signed in');
+      if (puuid !== p) throw new Error('account changed');
+      return mastery.refresh(p);
+    },
+    'mastery:agent': (puuid: unknown, agentId: unknown) => {
+      const p = session.puuid ?? str(puuid, 40);
+      if (puuid !== p) throw new Error('account changed');
+      return mastery.detail(p, str(agentId, 40).toLowerCase(), !session.puuid);
     },
     // ---- Lifetime warehouse + Performance Intelligence ----
     'warehouse:get': (queue: unknown) => {

@@ -120,7 +120,14 @@ export function Segmented<T extends string>({ value, options, onChange, classNam
   useEffect(() => {
     const ro = new ResizeObserver(measure);
     if (wrap.current) ro.observe(wrap.current);
-    return () => ro.disconnect();
+    // A control that mounts mid-layout (or before the fonts) can measure 0 and the wrap's size may never
+    // change afterwards: measure again next frame and once the fonts are in.
+    const raf = requestAnimationFrame(measure);
+    void document.fonts?.ready.then(measure);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+    };
   }, [measure]);
   return (
     <div ref={wrap} role="tablist" className={cx('relative inline-flex rounded-full bg-white/[0.08] p-[3px]', size === 'sm' ? 'h-8' : 'h-9', className)}>

@@ -49,13 +49,15 @@ interface Shape {
   tier: number;
 }
 
+// Tiers sit in the Diamond / Ascendant range (18 = Diamond 1, 21 = Ascendant 1) so screenshots read like a
+// plausible high-elo account.
 const SHAPES: Record<Persona, Shape> = {
   // Wins pay a lot more than losses cost and lobbies sit about two divisions higher.
-  above: { win: 23, loss: -11, margin: 0.35, lobby: 2.2, winProb: 0.58, tier: 14 },
-  at: { win: 18, loss: -18, margin: 0.3, lobby: 0, winProb: 0.5, tier: 15 },
-  below: { win: 12, loss: -23, margin: 0.3, lobby: -2.2, winProb: 0.44, tier: 13 },
-  excluded: { win: 18, loss: -17, margin: 0.3, lobby: 0, winProb: 0.5, tier: 12 },
-  normal: { win: 19, loss: -17, margin: 0.4, lobby: 0, winProb: 0.52, tier: 11 },
+  above: { win: 23, loss: -11, margin: 0.35, lobby: 2.2, winProb: 0.58, tier: 19 },
+  at: { win: 18, loss: -18, margin: 0.3, lobby: 0, winProb: 0.5, tier: 20 },
+  below: { win: 12, loss: -23, margin: 0.3, lobby: -2.2, winProb: 0.44, tier: 19 },
+  excluded: { win: 18, loss: -17, margin: 0.3, lobby: 0, winProb: 0.5, tier: 18 },
+  normal: { win: 19, loss: -17, margin: 0.4, lobby: 0, winProb: 0.52, tier: 18 },
 };
 
 export function personaOf(puuid: string, mePersona: Persona): Persona {

@@ -37,6 +37,8 @@ const STEPS: Step[] = [
   { name: '03-shop-valorant-closed', nav: 'shop', wait: 4000 },
   { name: '04-shop-video-playing', nav: 'shop', wait: 9000, js: `document.querySelector('[data-skin-card]')?.click();`, check: VIDEO_CHECK },
   { name: '05-shop-bundles', nav: 'shop:bundles', wait: 3000, js: ESC },
+  // Re-shot once the drawer's fade from step 04 has fully cleared.
+  { name: '05-shop-bundles', wait: 2500 },
   { name: '06-shop-night', nav: 'shop:night', wait: 2500 },
   { name: '07-collection', nav: 'collection', wait: 5000 },
   { name: '08-collection-drawer-video', nav: 'collection', wait: 9000, js: `document.querySelector('[data-skin-card]')?.click();`, check: VIDEO_CHECK },

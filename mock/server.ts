@@ -156,7 +156,10 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
   function newScenario(): Scenario {
     matchN++;
     const r = rng(`scenario${matchN}${bootAt}`);
-    const myTeam: Color = r() < 0.5 ? 'Blue' : 'Red';
+    // Mock: you start on Red (attack first), so agent select and the overlay show ATK. The draw is kept so
+    // every later roll in the scenario stays the same.
+    r();
+    const myTeam: Color = 'Red';
     // The MMR personas and the tracker-private player sit in every mock match, so Live can open each of them.
     // MOCK_STRESS=hidden with the squad on: your squad sits in the match, every one of them hidden.
     const allies = stress === 'hidden' && world ? [ME, SQUAD.drain, SQUAD.carry, SQUAD.neutral, SQUAD.five] : [ME, PERSONA.at, PERSONA.trackerPrivate, uuid(`ally${matchN}-3`), PERSONA.below];
@@ -165,7 +168,7 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     const agents = new Map<string, string>();
     [...allies, ...enemies].forEach((p, i) => agents.set(p, pool[i % pool.length]));
     const tiers = new Map<string, number>();
-    for (const p of [...allies, ...enemies]) tiers.set(p, stress === 'unrated' ? 0 : stress === 'radiant' ? 27 : (careerOf(p).find((m) => m.queue === 'competitive')?.tierAfter ?? 9 + Math.floor(r() * 14)));
+    for (const p of [...allies, ...enemies]) tiers.set(p, stress === 'unrated' ? 0 : stress === 'radiant' ? 27 : (careerOf(p).find((m) => m.queue === 'competitive')?.tierAfter ?? 17 + Math.floor(r() * 5)));
     return {
       id: uuid(`match${matchN}${bootAt}`),
       n: matchN,
@@ -432,7 +435,8 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
         subject: s,
         teamId: s, // DM: teamId is the player's puuid
         characterId: pick(r, AGENTS),
-        stats: { score: kills[i] * 100, roundsPlayed: 1, kills: kills[i], deaths: 10 + Math.floor(r() * 25), assists: Math.floor(r() * 5) },
+        // Score over one "round" reads as ACS, so keep it in a believable 170-320 band.
+        stats: { score: 150 + kills[i] * 4 + Math.floor(r() * 30), roundsPlayed: 1, kills: kills[i], deaths: 10 + Math.floor(r() * 25), assists: Math.floor(r() * 5) },
       })),
       teams: subjects.map((s, i) => ({ teamId: s, won: s === best, roundsPlayed: 0, roundsWon: 0, numPoints: kills[i] })),
       roundResults: [],
@@ -615,9 +619,10 @@ export async function startMockServer(opts: MockOptions = {}): Promise<MockHandl
     // and art resolve), with a card and a buddy in it like real bundles.
     const period = process.env.MOCK_FAST === '1' ? 30_000 : 90_000;
     const slot = Math.floor((Date.now() - bootAt) / period);
-    const rotating = ['d84cd2bf-42e5-34e8-062f-cba8d2c66fb2', 'ab83f73d-485f-e010-8ea0-24b538468a1a', '332d705c-4852-11e5-c590-88b1f6e47f72', '8a3507cd-44ef-0695-1d66-4da0f87e7522'];
-    const night: string[] = mockFixtures.shop.night;
-    const rotIds = [night[slot % night.length], night[(slot + 2) % night.length], night[(slot + 4) % night.length]];
+    // Each rotating bundle carries its own collection's skins (fixture shop.rotating), so names match the bundle.
+    const themed: Record<string, string[]> = mockFixtures.shop.rotating ?? {};
+    const rotating = Object.keys(themed);
+    const rotIds = themed[rotating[slot % rotating.length]];
     const rotItem = (type: string, id: string, base: number) => ({ Item: { ItemTypeID: type, ItemID: id, Amount: 1 }, BasePrice: base, CurrencyID: VP, DiscountPercent: 0.1, DiscountedPrice: Math.round(base * 0.9), IsPromoItem: false });
     const rotItems = [
       ...rotIds.map((id) => rotItem('e7c63390-eda7-46e0-bb7a-a6abdacd2433', id, price(id))),

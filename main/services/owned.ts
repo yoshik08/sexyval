@@ -23,6 +23,10 @@ export class OwnedService {
   state: OwnedState = EMPTY();
   private inflight: Promise<OwnedState> | null = null;
   private puuid: string | null = null;
+  /** The account `state` belongs to. */
+  get account(): string | null {
+    return this.puuid;
+  }
 
   constructor(
     private readonly api: RiotApi,

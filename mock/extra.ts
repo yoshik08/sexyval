@@ -5,6 +5,7 @@ import type http from 'node:http';
 import { AGENTS, ME, nameFor, rng, SQUAD, uuid } from './data';
 import { updateJson, type CareerMatch, type SquadMode } from './career';
 import fixtures from './fixtures/collection.json';
+import { masteryRoute } from './mastery';
 
 const fx: any = fixtures;
 
@@ -157,6 +158,12 @@ export function createExtra(ctx: ExtraCtx) {
   return async function handle(req: http.IncomingMessage, res: http.ServerResponse, p: string, method: string, url: URL): Promise<boolean> {
     const phase = ctx.phase();
     let m: RegExpExecArray | null;
+
+    // ---- pd: Agent Mastery (synthetic, mock/mastery.ts) ----
+    if (p.startsWith('/pd/bloomline/')) {
+      const r = await masteryRoute(p);
+      if (r) return json(res, r[0], r[1]), true;
+    }
 
     // ---- sign-in flow (mock of auth.riotgames.com etc) ----
     if (p === '/__auth/authorize') {

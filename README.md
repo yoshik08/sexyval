@@ -6,8 +6,8 @@ Personal, unofficial Valorant companion for Windows, in a normal desktop window,
 
 ## Install
 
-- `release/SexyVal-Setup-1.7.0.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
-- `release/SexyVal-Portable-1.7.0.exe` runs without installing.
+- `release/SexyVal-Setup-1.8.0.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
+- `release/SexyVal-Portable-1.8.0.exe` runs without installing.
 
 The builds are unsigned, so Windows SmartScreen will warn. Click "More info", then "Run anyway".
 
@@ -20,6 +20,7 @@ The builds are unsigned, so Windows SmartScreen will warn. Click "More info", th
 | Friends, presence, friend requests | Riot Client running (local chat API). |
 | Party & matchmaking | Valorant running (Riot's party service only knows online players). |
 | Live (queue / agent select / in game) | Valorant running. This is the only tab that shows "Waiting for Valorant". |
+| Agent Mastery | Tokens (as above). Reads Riot's undocumented mastery service (`pd/bloomline/v0`, read-only); MP-per-level, reward track and KC prices come from the VALORANT Wiki and are labelled as such. Without tokens it shows the last saved copy. |
 | Skin prices | Nothing. A price list (Valorant wiki, 5 Nov 2026) ships with the app; prices seen in your store replace it. A HenrikDev key is optional. |
 
 The header chip shows both states: **Client** (Riot Client local API reachable and signed in) and **Valorant** (game process in external-sessions).

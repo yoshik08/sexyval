@@ -205,6 +205,19 @@ export class RiotApi {
     return this.json('pd', 'POST', `/contracts/v1/contracts/${this.me()}/special/${contractId}`, { raw: 'activateContract', retries: 0 });
   }
 
+  // --- Agent Mastery ("Bloomline" internally). Undocumented by Riot; read-only: SexyVal never calls the
+  // POST that changes an Agent ID. The puuid is passed explicitly so a request can't drift to another
+  // account if the active one changes while it is in flight.
+  bloomlinePlayer(puuid: string) {
+    return this.json('pd', 'GET', `/bloomline/v0/players/${enc(puuid)}`, { allow: [404], raw: 'bloomlinePlayer', retries: 2 });
+  }
+  bloomlineBonsai(puuid: string, agentId: string) {
+    return this.json('pd', 'GET', `/bloomline/v0/players/${enc(puuid)}/bonsai/${enc(agentId)}`, { allow: [404], raw: 'bloomlineBonsai', retries: 1 });
+  }
+  bloomlineValidQueues() {
+    return this.json('pd', 'GET', '/bloomline/v0/config/valid-queues', { allow: [404], raw: 'bloomlineQueues', retries: 1 });
+  }
+
   // --- party (glz). Manual button presses only. ---
   partyPlayer() {
     return this.json('glz', 'GET', `/parties/v1/players/${this.me()}`, { allow: [404], raw: 'partyPlayer', retries: 1 });

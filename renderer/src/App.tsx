@@ -3,7 +3,7 @@ import type { AppState, Connection, View } from '../../shared/types';
 import type { UiResumeState } from '../../shared/update';
 import { api } from './lib/api';
 import { cx } from './lib/format';
-import { MagnifyingGlass, Broadcast, Compass, Crosshair, FilmStrip, Gauge, GearSix, MapPin, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
+import { MagnifyingGlass, Broadcast, Compass, Crosshair, FilmStrip, Gauge, GearSix, MapPin, Medal, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
 import { withViewTransition } from './lib/motion';
 import { openPlayer, playerNavStore, startStores, useLoadoutDirty, useSettings, useStore, useVideoPlaying } from './lib/store';
 import { MmrScreen } from './screens/Mmr';
@@ -26,6 +26,7 @@ import { ProfilesScreen } from './screens/Profiles';
 import { HubScreen } from './screens/Hub';
 import { LineupsScreen } from './screens/Lineups';
 import { ReplaysScreen } from './screens/Replays';
+import { MasteryScreen } from './screens/Mastery';
 
 type NavItem = { id: View; label: string; Icon: ComponentType<IconProps> };
 // Groups are separated by space only: no section labels above anything.
@@ -38,6 +39,7 @@ const GROUPS: NavItem[][] = [
   ],
   [
     { id: 'progress', label: 'Missions', Icon: Target },
+    { id: 'mastery', label: 'Mastery', Icon: Medal },
     { id: 'profiles', label: 'Profiles', Icon: UserCircle },
     { id: 'mmr', label: 'MMR', Icon: Gauge },
     { id: 'party', label: 'Party', Icon: UsersThree },
@@ -351,6 +353,7 @@ export function App() {
           )}
           {view === 'lineups' && <LineupsScreen initialTab={sub === 'mine' || sub === 'library' ? sub : undefined} />}
           {view === 'replays' && <ReplaysScreen connected={connected} />}
+          {view === 'mastery' && <MasteryScreen myPuuid={state?.conn.puuid ?? undefined} />}
           {view === 'settings' && <SettingsScreen state={state} initialTab={(sub as any) ?? 'general'} />}
         </div>
       </main>

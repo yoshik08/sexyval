@@ -3,6 +3,7 @@ import { httpRequest } from '../riot/http';
 import { readJson, writeJson } from '../paths';
 import { log } from '../log';
 import { toMinimap } from '../../shared/replay';
+import { masteryCardsByDeveloperName } from '../../shared/mastery';
 import type { Catalog, CatalogExtra, CatalogSkin, CatalogTier, CatalogWeapon, SkinSource } from '../../shared/features';
 
 const BASE = 'https://valorant-api.com/v1';
@@ -19,7 +20,8 @@ const lc = (v: unknown) => String(v ?? '').toLowerCase();
 const hex = (c: unknown) => (typeof c === 'string' && /^[0-9a-f]{6,8}$/i.test(c) ? `#${c.slice(0, 6)}` : undefined);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Browse = { agents: any[]; maps: any[]; weapons: any[]; missions: any[]; contracts: any[]; seasons: any[] };
+/** masteryCards: agent developer name (lowercase) → that agent's Agent Mastery player card id. */
+type Browse = { agents: any[]; maps: any[]; weapons: any[]; missions: any[]; contracts: any[]; seasons: any[]; masteryCards?: Record<string, string> };
 const EMPTY_BROWSE = (): Browse => ({ agents: [], maps: [], weapons: [], missions: [], contracts: [], seasons: [] });
 
 /** Contract reward -> where a skin comes from (battle pass, event pass, agent gear). Pure. */
@@ -250,10 +252,12 @@ export class CatalogService {
     };
     const old = cachedBrowse ?? EMPTY_BROWSE();
     this.browse = {
+      masteryCards: cards ? masteryCardsByDeveloperName(cards) : old.masteryCards,
       agents: agents
         ? agents.map((a: any) => ({
             id: lc(a.uuid),
             name: a.displayName,
+            developerName: typeof a.developerName === 'string' ? a.developerName : undefined,
             role: a.role?.displayName,
             roleIcon: str(a.role?.displayIcon),
             description: a.description,
@@ -341,7 +345,7 @@ export class CatalogService {
   }
 
   /** Reward display for contract levels. */
-  rewardName(type: string | undefined, id: string | undefined): { name: string; icon?: string } {
+  rewardName(type: string | undefined, id: string | undefined): { name: string; icon?: string; art?: string; text?: string } {
     if (!id) return { name: type ?? 'Reward' };
     const t = String(type ?? '');
     if (t.includes('Skin')) {
@@ -350,7 +354,7 @@ export class CatalogService {
     }
     for (const list of [this.catalog.buddies, this.catalog.sprays, this.catalog.cards, this.catalog.titles]) {
       const x = list.find((i) => i.ownIds.includes(id));
-      if (x) return { name: x.name, icon: x.icon };
+      if (x) return { name: x.name, icon: x.icon, art: x.large ?? x.icon, text: x.text };
     }
     if (t === 'Currency') return { name: 'Radianite / currency' };
     if (t === 'Character') return { name: this.browse.agents.find((a) => a.id === id)?.name ?? 'Agent' };

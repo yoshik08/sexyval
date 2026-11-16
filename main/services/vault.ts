@@ -126,8 +126,17 @@ export class VaultService {
         // skip a file being written
       }
     }
+    const mastery: Record<string, unknown> = {};
+    for (const f of await fs.readdir(this.dataDir('mastery')).catch(() => [] as string[])) {
+      if (!ID_FILE.test(f)) continue;
+      try {
+        mastery[f] = JSON.parse(await fs.readFile(this.dataDir('mastery', f), 'utf8'));
+      } catch {
+        // skip a file being written
+      }
+    }
     const matchNames = (await fs.readdir(this.dataDir('matches')).catch(() => [] as string[])).filter((f) => MATCH_FILE.test(f));
-    const payload: VaultPayload = { files, mmrUpdates, matchCount: matchNames.length };
+    const payload: VaultPayload = { files, mmrUpdates, mastery, matchCount: matchNames.length };
     if (includeMatches) {
       payload.matches = {};
       const mirror = new Set(await fs.readdir(this.p('matches')).catch(() => [] as string[]));
@@ -223,7 +232,7 @@ export class VaultService {
   covers(file: string): boolean {
     const base = path.basename(file);
     const dir = path.basename(path.dirname(file));
-    return (VAULT_FILES as readonly string[]).includes(base) || dir === 'mmr-updates' || dir === 'matches';
+    return (VAULT_FILES as readonly string[]).includes(base) || dir === 'mmr-updates' || dir === 'mastery' || dir === 'matches';
   }
 
   // ---------- recovery ----------
@@ -254,6 +263,14 @@ export class VaultService {
     for (const f of missingOnly(Object.keys(p.mmrUpdates), haveMmr)) {
       await fs.writeFile(this.dataDir('mmr-updates', f), JSON.stringify(p.mmrUpdates[f]));
       restored.push(`mmr-updates/${f}`);
+    }
+    if (p.mastery) {
+      await fs.mkdir(this.dataDir('mastery'), { recursive: true });
+      const haveMastery = new Set(await fs.readdir(this.dataDir('mastery')).catch(() => [] as string[]));
+      for (const f of missingOnly(Object.keys(p.mastery), haveMastery)) {
+        await fs.writeFile(this.dataDir('mastery', f), JSON.stringify(p.mastery[f]));
+        restored.push(`mastery/${f}`);
+      }
     }
     await fs.mkdir(this.dataDir('matches'), { recursive: true });
     const haveMatches = new Set(await fs.readdir(this.dataDir('matches')).catch(() => [] as string[]));
@@ -291,6 +308,13 @@ export class VaultService {
     for (const [f, v] of Object.entries(p.mmrUpdates)) {
       await fs.writeFile(this.dataDir('mmr-updates', f), JSON.stringify(v));
       n++;
+    }
+    if (p.mastery) {
+      await fs.mkdir(this.dataDir('mastery'), { recursive: true });
+      for (const [f, v] of Object.entries(p.mastery)) {
+        await fs.writeFile(this.dataDir('mastery', f), JSON.stringify(v));
+        n++;
+      }
     }
     if (p.matches) {
       await fs.mkdir(this.dataDir('matches'), { recursive: true });
