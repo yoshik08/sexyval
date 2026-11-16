@@ -210,6 +210,10 @@ export interface ShopView {
   wallet: { vp: number; rad: number; kc: number } | null;
   fetchedAt?: number;
   source?: string;
+  /** Account this store belongs to. */
+  puuid?: string;
+  /** Showing the last good store from disk (refresh failed or not done yet); fetchedAt says when it's from. */
+  cached?: boolean;
 }
 
 export interface Settings {
@@ -261,6 +265,15 @@ export interface Settings {
   /** Game boost (Settings → Boost): master switch and each tweak. */
   boostEnabled: boolean;
   boostTweaks: Record<string, boolean>;
+  /** Smart Store Sync route (Settings > Network). proxyUrl: loopback only (socks5:// or http://). */
+  netMode: 'direct' | 'fallback' | 'proxy';
+  proxyUrl: string;
+  /** Discord Rich Presence (Settings > Integrations). Off by default; clientId = your Discord application ID. */
+  discordEnabled: boolean;
+  discordClientId: string;
+  discordPrivacy: { map: boolean; agent: boolean; rank: boolean; party: boolean; elapsed: boolean; mode: boolean };
+  /** Lightweight background mode (Settings > Performance). auto = while Valorant runs. */
+  perfMode: 'auto' | 'always' | 'normal';
 }
 
 export interface StretchStatus {

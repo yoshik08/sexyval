@@ -1,6 +1,8 @@
 import { RateLimiter, withRetry } from '../../shared/rateLimit';
 import { httpRequest, safePath, HttpError, type HttpResult } from './http';
 import { RiotSession, WaitingError } from './session';
+import type { Dispatcher } from 'undici';
+import type { NetRouter } from './netRoute';
 import { log } from '../log';
 
 type Kind = 'glz' | 'pd' | 'shared';
@@ -28,16 +30,18 @@ export class RiotApi {
   private lastForcedRefresh = 0;
   /** pd requests started (each call, plus the resend after a token refresh). Debug counts only. */
   pdCalls = 0;
+  /** Smart Store Sync route for storefront + wallet (Settings > Network). Null = direct. */
+  route: NetRouter | null = null;
 
   constructor(
     readonly session: RiotSession,
     private readonly onRaw: (key: string, data: unknown) => void,
   ) {}
 
-  async call(kind: Kind, method: string, path: string, body?: unknown, retries = 3): Promise<HttpResult> {
+  async call(kind: Kind, method: string, path: string, body?: unknown, retries = 3, dispatcher?: Dispatcher): Promise<HttpResult> {
     const limiter = kind === 'glz' ? this.glzLimiter : this.pdLimiter;
     const send = () =>
-      withRetry(() => httpRequest(this.session.base(kind) + path, { method, headers: this.session.headers(), body }), {
+      withRetry(() => httpRequest(this.session.base(kind) + path, { method, headers: this.session.headers(), body, dispatcher }), {
         limiter,
         maxRetries: retries,
       });
@@ -149,11 +153,17 @@ export class RiotApi {
 
   // --- store ---
   /** The game itself POSTs v3; v2 GET stays as a fallback. */
-  async storefront(puuid: string): Promise<{ res: HttpResult; source: string; v2Status: number }> {
-    const v3 = await this.call('pd', 'POST', `/store/v3/storefront/${puuid}`, {});
+  private routed<T>(fn: (d?: Dispatcher) => Promise<T>): Promise<T> {
+    return this.route ? this.route.run(fn) : fn(undefined);
+  }
+  storefront(puuid: string): Promise<{ res: HttpResult; source: string; v2Status: number }> {
+    return this.routed((d) => this.storefrontVia(puuid, d));
+  }
+  private async storefrontVia(puuid: string, d?: Dispatcher): Promise<{ res: HttpResult; source: string; v2Status: number }> {
+    const v3 = await this.call('pd', 'POST', `/store/v3/storefront/${puuid}`, {}, 3, d);
     this.onRaw('storefrontV3', { status: v3.status, path: safePath(v3.url), body: v3.json ?? v3.text.slice(0, 4000) });
     if (v3.status === 200 && v3.json) return { res: v3, source: 'v3 POST', v2Status: 0 };
-    const v2 = await this.call('pd', 'GET', `/store/v2/storefront/${puuid}`);
+    const v2 = await this.call('pd', 'GET', `/store/v2/storefront/${puuid}`, undefined, 3, d);
     this.onRaw('storefrontV2', { status: v2.status, path: safePath(v2.url), body: v2.json ?? v2.text.slice(0, 4000) });
     if (v2.status === 200 && v2.json) return { res: v2, source: `v2 GET (v3 returned ${v3.status})`, v2Status: v2.status };
     throw new HttpError(v3.status, safePath(v3.url), v3.text.slice(0, 500));
@@ -162,10 +172,13 @@ export class RiotApi {
    * Storefront for a signed-in account that isn't the active one (stores differ per account). Same
    * v3-then-v2 order and the same pd rate limiter; the tokens are only used for this request.
    */
-  async storefrontFor(auth: { accessToken: string; entitlement: string; puuid: string; region: string }): Promise<HttpResult> {
+  storefrontFor(auth: { accessToken: string; entitlement: string; puuid: string; region: string }): Promise<HttpResult> {
+    return this.routed((d) => this.storefrontForVia(auth, d));
+  }
+  private async storefrontForVia(auth: { accessToken: string; entitlement: string; puuid: string; region: string }, dispatcher?: Dispatcher): Promise<HttpResult> {
     const base = this.session.pdBaseFor(auth.region);
     const headers = this.session.headersFor(auth);
-    const send = (method: string, p: string, body?: unknown) => withRetry(() => httpRequest(base + p, { method, headers, body }), { limiter: this.pdLimiter, maxRetries: 2 });
+    const send = (method: string, p: string, body?: unknown) => withRetry(() => httpRequest(base + p, { method, headers, body, dispatcher }), { limiter: this.pdLimiter, maxRetries: 2 });
     const v3 = await send('POST', `/store/v3/storefront/${auth.puuid}`, {});
     if (v3.status === 200 && v3.json) return v3;
     const v2 = await send('GET', `/store/v2/storefront/${auth.puuid}`);
@@ -173,7 +186,12 @@ export class RiotApi {
     throw new HttpError(v3.status, safePath(v3.url), v3.text.slice(0, 300));
   }
   wallet(puuid: string) {
-    return this.json('pd', 'GET', `/store/v1/wallet/${puuid}`, { raw: 'wallet' });
+    return this.routed(async (d) => {
+      const res = await this.call('pd', 'GET', `/store/v1/wallet/${puuid}`, undefined, 3, d);
+      this.onRaw('wallet', { status: res.status, path: safePath(res.url), body: res.json ?? res.text.slice(0, 4000) });
+      if (res.status < 200 || res.status > 299) throw new HttpError(res.status, safePath(res.url), res.text.slice(0, 500));
+      return res;
+    });
   }
   ownedItems(itemTypeId: string) {
     return this.json('pd', 'GET', `/store/v1/entitlements/${this.me()}/${itemTypeId}`, { raw: `owned:${itemTypeId.slice(0, 8)}` });

@@ -1,4 +1,4 @@
-import { Agent, fetch } from 'undici';
+import { Agent, fetch, type Dispatcher } from 'undici';
 
 // Self-signed cert is accepted ONLY for the local Riot Client on 127.0.0.1.
 export const localInsecure = new Agent({ connect: { rejectUnauthorized: false } });
@@ -16,6 +16,8 @@ export interface HttpOptions {
   headers?: Record<string, string>;
   body?: unknown;
   timeoutMs?: number;
+  /** Store sync route (main/riot/netRoute.ts); never set for 127.0.0.1. */
+  dispatcher?: Dispatcher;
 }
 
 export class HttpError extends Error {
@@ -45,7 +47,7 @@ export function safePath(url: string): string {
 
 export async function httpRequest(url: string, opts: HttpOptions = {}): Promise<HttpResult> {
   const u = new URL(url);
-  const dispatcher = u.protocol === 'https:' && u.hostname === '127.0.0.1' ? localInsecure : undefined;
+  const dispatcher = u.protocol === 'https:' && u.hostname === '127.0.0.1' ? localInsecure : opts.dispatcher;
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   let body: string | undefined;
   if (opts.body !== undefined) {

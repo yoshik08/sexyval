@@ -50,6 +50,14 @@ import { EncounterService } from './services/encounters';
 import { VaultService } from './services/vault';
 import { writeListeners } from './paths';
 import { computeHealth, type HealthReport } from '../shared/health';
+import { NetRouter } from './riot/netRoute';
+import { httpRequest } from './riot/http';
+import { WishlistStore } from './services/wishlist';
+import { DiscordPresence } from './services/discord';
+import { WarehouseService } from './services/warehouse';
+import { liteActive, PerfSampler } from './services/perf';
+import type { NetworkStatus, PerfStatus } from '../shared/features';
+import type { Act } from '../shared/warehouse';
 
 const MOCK = process.env.MOCK === '1';
 const SHOTS = process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS;
@@ -79,10 +87,28 @@ const rpc: Record<string, (...args: any[]) => unknown> = {};
 /** Last work before the app exits (archives, native display, session tweaks). Awaited, max 8 s. */
 const beforeQuit: (() => Promise<void>)[] = [];
 let systems: SystemServices | null = null;
-/** Boost: SexyVal gets out of the way while Valorant runs. */
+/** Lightweight mode (Settings > Performance, or Boost's "quiet" tweak): SexyVal gets out of the way. */
 let quiet = false;
+/** Boost's quiet tweak is applied (game running + tweak on). */
+let boostQuiet = false;
+/** Work postponed while lightweight (runs when it ends). */
+const deferred = new Map<string, () => void>();
+let gameRunning = (): boolean => false;
 
 function setQuiet(on: boolean): void {
+  boostQuiet = on;
+  applyLite();
+}
+
+function deferWhileLite(name: string, fn: () => void): void {
+  if (!quiet) return fn();
+  deferred.set(name, fn);
+}
+
+/** Recomputes lightweight mode from the setting, the Valorant process and Boost. */
+function applyLite(): void {
+  const on = liteActive(process.env.SEXYVAL_PERF_MODE === 'always' || process.env.SEXYVAL_PERF_MODE === 'normal' ? (process.env.SEXYVAL_PERF_MODE as 'always' | 'normal') : getSettings().perfMode, gameRunning(), boostQuiet);
+  if (on === quiet) return;
   quiet = on;
   win?.webContents.setBackgroundThrottling(on || !SHOTS);
   const level = on ? os.constants.priority.PRIORITY_BELOW_NORMAL : os.constants.priority.PRIORITY_NORMAL;
@@ -94,11 +120,19 @@ function setQuiet(on: boolean): void {
     }
   }
   send('quiet', on);
-  log.info(`quiet mode ${on ? 'on' : 'off'}`);
+  log.info(`lightweight mode ${on ? 'on' : 'off'}`);
+  if (!on) {
+    const jobs = [...deferred.values()];
+    deferred.clear();
+    // Resume deferred work one at a time, not in a burst right as the game closes.
+    jobs.forEach((j, i) => setTimeout(j, 5_000 + i * 3_000).unref?.());
+  }
 }
 let resume: ResumeStore | null = null;
 let resumed: ResumeFile | null = null;
 let updater: AppUpdater | null = null;
+let warpService: WarpService | null = null;
+const perfSampler = new PerfSampler();
 let healthNow: () => HealthReport = () => ({ overall: 'connecting', summary: 'Starting', items: [] });
 let pushHealth: () => void = () => undefined;
 let vault: VaultService | null = null;
@@ -197,7 +231,7 @@ function createWindow(): BrowserWindow {
   // Capture modes must never take focus: a focused test window catches keystrokes meant for the game.
   // Started at Windows login (--hidden), or relaunching hidden after a silent update, with close-to-tray on: stay in the tray until clicked.
   const startHidden = (process.argv.includes('--hidden') || resumed?.hiddenInTray) && getSettings().closeToTray;
-  w.once('ready-to-show', () => (SHOTS ? w.showInactive() : startHidden ? undefined : w.show()));
+  w.once('ready-to-show', () => (SHOTS || process.env.SEXYVAL_SHOW_INACTIVE === '1' ? w.showInactive() : startHidden ? undefined : w.show()));
   const saveBounds = () => {
     if (w.isDestroyed() || w.isMinimized()) return;
     const maximized = w.isMaximized();
@@ -206,7 +240,7 @@ function createWindow(): BrowserWindow {
   };
   // Boost quiet mode: a minimized window goes to the tray while Valorant runs.
   w.on('minimize', () => {
-    if (quiet && tray) w.hide();
+    if (boostQuiet && tray) w.hide();
   });
   w.on('resize', saveBounds);
   w.on('move', saveBounds);
@@ -307,6 +341,9 @@ async function startServices(): Promise<void> {
     platformType: () => getSettings().platformType,
   });
   const api = new RiotApi(session, onRaw);
+  // Smart Store Sync route (Settings > Network): store requests only; sign-in never uses it.
+  const netRouter = new NetRouter(() => ({ mode: getSettings().netMode, proxyUrl: getSettings().proxyUrl }), undefined, () => pushHealth());
+  api.route = netRouter;
   const assets = new AssetService(dataDir('assets'));
   const history = new HistoryService(api, assets, dataDir('matches'), () => emitLater());
   const names = new NameService(api, () => emitLater());
@@ -365,6 +402,8 @@ async function startServices(): Promise<void> {
     send('owned', s);
     shop?.refreshOwnedFlags();
   });
+  const wishlist = new WishlistStore(dataDir('wishlist.json'));
+  await wishlist.load();
   shop = new ShopService(
     api,
     assets,
@@ -372,7 +411,7 @@ async function startServices(): Promise<void> {
       onChange: (v: ShopView) => send('shop', v),
       onError: (m) => toast('error', m),
       isOwnedLevel: (id) => owned.state.levels.includes(id.toLowerCase()),
-      onWishlistHit: (n) => notify('Wishlist skin in your shop', n.join(', ')),
+      onWishlistHit: (hits) => notify('Wishlist skin in your store', hits.map((h) => `${h.name}${h.kind === 'night' ? ' (Night Market)' : h.kind === 'bundle' ? ' (bundle)' : ''}`).join(', ')),
       onLoaded: (v) => {
         prices.record(v);
       },
@@ -381,9 +420,10 @@ async function startServices(): Promise<void> {
         if (walletChanged) void owned.refresh(); // purchase likely: refresh owned items
       },
     },
-    dataDir('wishlist.json'),
+    wishlist,
+    dataDir('store-cache.json'),
   );
-  await shop.loadWishlist();
+  await shop.loadCache();
   const shopRef = shop;
   storeSync = new StoreSync({
     api,
@@ -396,6 +436,9 @@ async function startServices(): Promise<void> {
     activeLabel: () => session.accountLabel ?? (session.puuid ? (names.get(session.puuid) ? `${names.get(session.puuid)!.name}#${names.get(session.puuid)!.tag}` : 'Riot Client account') : 'account'),
     onNewBundles: (list) => notify('New bundle in the store', list.map((b) => b.name ?? 'Featured bundle').join(', ')),
     onChange: () => send('store-archive', Date.now()),
+    wish: wishlist,
+    onWishlistHit: (hits, _puuid, label) => notify(`Wishlist skin in ${label}’s store`, hits.map((h) => h.name).join(', ')),
+    deferred: () => quiet,
   });
   const progression = new ProgressionService(api, catalog, assets);
   const party = new PartyService(api, assets, catalog, names);
@@ -412,6 +455,34 @@ async function startServices(): Promise<void> {
   const replays = new ReplayService(api, assets, catalog, history, names, dataDir('replays'));
   const spending = new SpendingService(api, catalog, dataDir('spending.json'), dataDir('fx.json'), () => send('spending', Date.now()));
   handleLocal(dataDir('lineups'));
+  const acts = (): Act[] => {
+    const all: any[] = catalog.browse.seasons ?? [];
+    return all
+      .filter((x) => x.type === 'Act' && x.start && x.end)
+      .map((x) => {
+        const ep = all.find((e) => e.id === x.parentId);
+        const own = String(x.title ?? x.name ?? 'Act');
+        const parent = ep?.title ?? ep?.name;
+        return { id: String(x.id), label: parent && !own.includes(parent) ? `${parent} · ${own}` : own, start: Date.parse(x.start), end: Date.parse(x.end) };
+      });
+  };
+  const warehouse = new WarehouseService(dataDir('matches'), dataDir('mmr-updates'), dataDir('warehouse'), {
+    acts,
+    mapName: (id) => (id ? assets.mapName(id) : undefined),
+    agentName: (id) => (id ? assets.agent(id)?.name : undefined),
+    paused: () => quiet,
+  });
+  const ingestSoon = (why: string) => {
+    const p = session.puuid;
+    if (p) deferWhileLite('warehouse', () => void warehouse.ingest(p, true).catch((e) => log.warn(`warehouse ingest (${why}) failed`, e)));
+  };
+  setInterval(() => ingestSoon('timer'), 15 * 60_000).unref?.();
+  const discord = new DiscordPresence(() => ({ enabled: getSettings().discordEnabled, clientId: getSettings().discordClientId, privacy: getSettings().discordPrivacy }), () => pushHealth());
+  beforeQuit.push(async () => discord.shutdown());
+  discord.apply();
+  if (process.env.SEXYVAL_PERF_LOG) perfSampler.startLog(process.env.SEXYVAL_PERF_LOG, () => (quiet ? 'lite' : 'normal'));
+  let presencePhase = '';
+  let phaseSince = Date.now();
   // Friend watch: watched friends coming online / finishing a match, from the Riot Client's local chat API.
   setInterval(() => {
     if (quiet) return;
@@ -430,6 +501,12 @@ async function startServices(): Promise<void> {
     shop,
     emit: (s: AppState) => {
       send('state', s);
+      if (s.phase !== presencePhase) {
+        if (presencePhase === 'ingame' && s.phase !== 'ingame') setTimeout(() => ingestSoon('match end'), 90_000).unref?.();
+        presencePhase = s.phase;
+        phaseSince = s.phase === 'queue' && s.queue?.enteredAt ? s.queue.enteredAt : Date.now();
+      }
+      discord.update({ valorantRunning: session.valorantRunning, state: s, phaseSince });
       pushHealth();
       overlay.update(s);
       onPhase(s);
@@ -442,6 +519,8 @@ async function startServices(): Promise<void> {
     eventsState: () => events?.state ?? 'off',
     onAccount: (puuid) => {
       owned.ensure(puuid);
+      send('wishlist', wishlist.ids(puuid));
+      ingestSoon('account');
       void storeSync?.syncOthers('tokens');
     },
     onNoTokens: () => {
@@ -464,6 +543,9 @@ async function startServices(): Promise<void> {
       accountsReadOnly: accounts?.storageReadOnly ?? false,
       pinned: getSettings().accountMode === 'pinned' && session.tokenSource === 'signin',
       vault: vault ? { ...vault.quickHealth(), now: Date.now() } : undefined,
+      store: shop ? { status: shop.view.status, cached: shop.view.cached, fetchedAt: shop.view.fetchedAt, error: shop.view.error, blocked: shop.view.status === 'error' && netRouter.status.lastBlocked === true } : undefined,
+      proxy: getSettings().netMode !== 'direct' ? { mode: getSettings().netMode as 'fallback' | 'proxy', state: netRouter.status.proxyState, error: netRouter.status.proxyError } : undefined,
+      discord: getSettings().discordEnabled ? discord.status : undefined,
     });
   };
   pushHealth = () => {
@@ -566,6 +648,47 @@ async function startServices(): Promise<void> {
     'store:bundles': () => archive.bundles(),
     'store:history': () => archive.days(),
     'wishlist:get': () => shop?.wishlistIds ?? [],
+    'wishlist:info': () => wishlist.info(session.puuid),
+    // ---- Smart Store Sync (Settings > Network) ----
+    'network:status': async (): Promise<NetworkStatus> => {
+      const v = shop?.view;
+      return {
+        route: netRouter.status,
+        active: v && session.puuid ? { label: session.accountLabel ?? 'Active account', fetchedAt: v.fetchedAt, cached: !!v.cached, error: v.error, status: v.status } : null,
+        others: [...(storeSync?.accountStatus.values() ?? [])],
+        warp: (await warpService?.modeInfo().catch(() => null)) ?? { installed: false },
+      };
+    },
+    // One HTTPS request to valorant-api.com through the proxy: no Riot tokens are sent.
+    'network:test': (url: unknown) => netRouter.test(str(url, 200), (d) => httpRequest('https://valorant-api.com/v1/version', { dispatcher: d, timeoutMs: 10_000 }).then((r) => { if (r.status !== 200) throw new Error(`HTTP ${r.status}`); })),
+    'network:syncNow': async () => {
+      await shop?.refresh();
+      await storeSync?.syncOthers('manual');
+      return true;
+    },
+    // ---- Discord Rich Presence (Settings > Integrations) ----
+    'discord:status': () => discord.status,
+    'discord:reconnect': () => {
+      discord.reconnect();
+      return discord.status;
+    },
+    // ---- Lifetime warehouse + Performance Intelligence ----
+    'warehouse:get': (queue: unknown) => {
+      const p = session.puuid;
+      if (!p) throw new Error('Not signed in');
+      const q = typeof queue === 'string' && /^[a-z]{0,20}$/.test(queue) && queue ? queue : 'competitive';
+      return warehouse.view(p, q);
+    },
+    'warehouse:export': async (format: unknown) => {
+      const p = session.puuid;
+      if (!p) throw new Error('Not signed in');
+      const f = format === 'json' ? 'json' : 'csv';
+      const r = await dialog.showSaveDialog(win!, { title: 'Export match history', defaultPath: `SexyVal-history-${new Date().toISOString().slice(0, 10)}.${f}`, filters: [{ name: f.toUpperCase(), extensions: [f] }] });
+      if (r.canceled || !r.filePath) return null;
+      const text = await warehouse.export(p, f);
+      await fsp.writeFile(r.filePath, f === 'csv' ? '﻿' + text : text);
+      return r.filePath;
+    },
     'wishlist:toggle': (id: unknown) => shop?.toggleWish(str(id, 64)),
     'overlay:displays': () => listDisplays(),
     'videos:info': () => videoCacheInfo(dataDir('videos')),
@@ -708,6 +831,9 @@ async function startServices(): Promise<void> {
     // Manual reconnect: forget the Riot Client handshake and event socket, then poll at once.
     'health:reconnect': () => {
       session.reset();
+      netRouter.reset();
+      if (getSettings().discordEnabled) discord.reconnect();
+      void shop?.refresh();
       events?.stop();
       events?.start();
       for (const a of accounts?.list() ?? []) if (a.status === 'offline' || a.status === 'error') void accounts?.retry(a.id);
@@ -759,14 +885,22 @@ async function startServices(): Promise<void> {
   });
   Object.assign(rpc, {
     'stretch:status': () => sys.stretch.status,
+    'perf:status': (sample: unknown): Promise<PerfStatus> | PerfStatus => {
+      const base = { mode: getSettings().perfMode, active: quiet, valorantRunning: sys.game.running, deferred: [...deferred.keys()] };
+      return sample === true ? perfSampler.sample().then((metrics) => ({ ...base, metrics })) : base;
+    },
     'stretch:monitors': () => sys.stretch.refreshMonitors().then(() => sys.stretch.status),
     'boost:status': () => sys.boost.emit(),
     'boost:preset': () => sys.boost.applyPreset(),
     'boost:restorePreset': () => sys.boost.restorePreset(),
   });
 
+  gameRunning = () => sys.game.running;
+  sys.game.on(() => applyLite());
+  applyLite();
   onSettings((s, prev) => {
     void sys.stretch.onSettings(s, prev);
+    if (s.perfMode !== prev.perfMode) applyLite();
     if (s.boostEnabled !== prev.boostEnabled || JSON.stringify(s.boostTweaks) !== JSON.stringify(prev.boostTweaks)) sys.boost.onSettings();
     if (s.appIcon !== prev.appIcon) {
       applyAppIcon(win, s.appIcon, iconPath());
@@ -779,6 +913,8 @@ async function startServices(): Promise<void> {
     }
     if (s.overlayPosition !== prev.overlayPosition || s.overlayScale !== prev.overlayScale || s.overlayDisplay !== prev.overlayDisplay) overlay.relayout();
     if (s.overlayEnabled && !prev.overlayEnabled) void checkDisplayMode();
+    if (s.netMode !== prev.netMode || s.proxyUrl !== prev.proxyUrl) netRouter.reset();
+    if (s.discordEnabled !== prev.discordEnabled || s.discordClientId !== prev.discordClientId || JSON.stringify(s.discordPrivacy) !== JSON.stringify(prev.discordPrivacy)) discord.apply();
     if (s.henrikKey !== prev.henrikKey) void offers.refresh(catalog.catalog, true).then(sendPrices);
   });
 }
@@ -812,6 +948,7 @@ function registerIpc(): void {
   });
   // Cloudflare WARP through the official warp-cli (sidebar row). Real machine state in every mode.
   const warp = new WarpService({ onStatus: (s) => send('warp', s) });
+  warpService = warp;
   Object.assign(rpc, {
     'warp:status': () => warp.refresh(),
     'warp:set': (on: unknown) => warp.set(on === true),

@@ -6,8 +6,8 @@ Personal, unofficial Valorant companion for Windows, in a normal desktop window,
 
 ## Install
 
-- `release/SexyVal-Setup-1.4.0.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
-- `release/SexyVal-Portable-1.4.0.exe` runs without installing.
+- `release/SexyVal-Setup-1.7.0.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
+- `release/SexyVal-Portable-1.7.0.exe` runs without installing.
 
 The builds are unsigned, so Windows SmartScreen will warn. Click "More info", then "Run anyway".
 
@@ -43,6 +43,44 @@ Troubleshooting first install:
 - **npm 11 skips install scripts** (`npm warn install-scripts … electron`). Run `node node_modules/electron/install.js` once.
 - **Electron download hangs extracting on very new Node**: unzip `%LOCALAPPDATA%\electron\Cache\*\electron-v33*-win32-x64.zip` into `node_modules/electron/dist` and write `electron.exe` into `node_modules/electron/path.txt`.
 - **App starts as plain Node** (`Cannot read properties of undefined (reading 'setPath')`): your shell has `ELECTRON_RUN_AS_NODE=1` (VS Code terminals set it). The npm scripts use `scripts/run-electron.mjs`, which strips it.
+
+## What changed in 1.7 (Project Phoenix)
+
+Reliability, persistence and your own history. Everything here is local; nothing is uploaded anywhere.
+
+- **Account switching is instant** (Phase 1). Switching accounts inside the Riot Client is picked up within about 4 seconds without restarting SexyVal. Every Riot response is tagged with the account it was asked for, so a slow answer for the old account is thrown away instead of mixing two accounts. Settings › Accounts › *Which account SexyVal shows*: **Follow client** (default) or **Pinned** (keep a saved sign-in even while the Riot Client runs another account).
+- **Saved accounts survive** (Phase 1). A network failure is no longer treated as "signed out": saved sign-ins retry with backoff (30 s up to 15 min) and only a real Riot login page marks one as needing a new login. If `accounts.json` can't be read, SexyVal uses its `.bak` copy or refuses to overwrite it, never "forgets" accounts.
+- **SexyVal Vault** (Phase 2, Settings › Data & Recovery). A checksummed `.sxyval` snapshot of your settings, saved account list, wishlist, store history, purchases, presets, MMR history and cached matches, in `%LOCALAPPDATA%\SexyVal\Vault` (outside the install folder). Snapshots are verified before they replace the previous one; a damaged one falls back to the newest valid version; a reinstall restores whatever is missing. Export / Import / Restore any version. Never contains Riot passwords, tokens or cookies.
+- **Connection health** (Phases 1 and 3). The status pill opens a panel with every component: Riot Client, sign-in, instant updates, saved sign-ins, account storage, vault, store sync, store proxy and Discord, each with a plain-language state (healthy, connecting, degraded, offline, sign-in needed, error) and the action that fixes it. Reconnect resets the Riot Client handshake, the event socket, the proxy route and Discord without a restart.
+- **Smart Store Sync** (Phase 3, Settings › Network). Store and wallet requests can go **Direct**, **Direct, then proxy** or **Proxy only**. The proxy must run on this PC (`socks5://` or `http://` on 127.0.0.1): for example Cloudflare WARP in proxy mode (`warp-cli mode proxy` gives SOCKS5 on 127.0.0.1:40000). SexyVal reads WARP's mode but never changes it, never touches system network settings, and keeps full TLS certificate checks, so the proxy only carries an encrypted tunnel to Riot. Sign-in and live game data never use the proxy. Each proxied request uses a fresh connection that is closed afterwards. Every account keeps its last good store on disk and shows it, labeled with when it was fetched, when a refresh fails; a failed sync never signs an account out.
+- **Discord Rich Presence** (Phase 3, Settings › Integrations). Off by default. Needs your own Discord application ID (create one at discord.com/developers/applications; its name is what Discord shows). Turns on and off instantly, clears the activity when Valorant closes or you turn it off, retries a closed Discord a few times (15 s → 5 min) and then waits for the next game-state change. Shows only your own phase, mode, map, locked agent, party size, elapsed time and (opt-in) rank; never your Riot ID, other players or hidden information. Talks to Discord's local IPC pipe directly (no extra dependency).
+- **Wishlist per account** (Phase 4). Each Riot account has its own wishlist (the old shared list is copied to each account the first time it is used). A wished-for skin in the daily store, a bundle or the Night Market sends one Windows notification per store appearance, including for your other signed-in accounts during store sync. Alerts are remembered across restarts; cached (offline) stores never alert. The skin page shows when it was last in your store and when you were last alerted.
+- **Lifetime history** (Phase 4, MMR tab, your own solo view). A per-account warehouse (`warehouse/<puuid>.json`) built incrementally from the match cache and stored competitive updates, deduplicated by match ID: rank over time, win rate by month, maps, agents and acts with attack/defense round win rates and RR. Matches Riot reported RR for but whose details were never stored are shown as a gap, not invented. Export CSV or JSON. JSON per account was chosen over SQLite: a few thousand rows load in milliseconds, and the Vault already protects both sources.
+- **Performance Intelligence** (Phase 4). Evidence-backed statements only, each with its sample size, the numbers compared and the method: map and agent win rates (Wilson 95% interval must exclude your overall rate, minimum 8 matches), attack vs defense (two-proportion z-test, 100+ rounds per side), "your defense on Bind has declined over your last 15 matches" (last 15 vs earlier on that map), opening duels (first kills vs first deaths, 30+), recent form (Welch t-test on ACS), fading in long sessions, and RR per win/loss from Riot's own updates. Fewer than 10 matches gives no insights at all. Nothing models Riot's hidden MMR. Opening-duel losses (first deaths) are stored from 1.7 on.
+- **Lightweight mode** (Phase 5, Settings › Performance): **While Valorant runs** (default), **Always** or **Off**. Turns off animations, blur and hover previews, throttles background drawing, runs SexyVal below normal priority, and postpones store sync for other accounts, friend-watch polling, history indexing and the game-update catalog refresh until Valorant closes (then runs them a few seconds apart). The live loop, Live screen, overlay, account switching, your active store and Discord presence never wait. Boost's "quiet" tweak still works and now uses the same mode. Measured numbers: see [Performance](#performance-17).
+
+### Performance (1.7)
+
+Measured with `node scripts/perf-measure.mjs 90` (mock build, the mock cycling menus → queue → agent select → match, window shown but not focused, first 20 s dropped, 13 samples of `app.getAppMetrics()` over all 5 SexyVal processes; Ryzen 7 7435HS, Windows 11, 16 Nov 2026):
+
+| | Normal | Lightweight |
+| --- | --- | --- |
+| CPU, median of all processes | 0.3 % | 0.2 % |
+| Memory (working set), median | 473 MB | 458 MB |
+
+SexyVal's baseline is already low, so the CPU difference is within measurement noise and is **not** claimed as an improvement; memory is about 15 MB (3 %) lower. The bigger effects of lightweight mode (no animation or blur work while the window is visible, background work moved out of the match) don't show in an idle mock run. Not measured: GPU use, and anything against a real game session.
+
+### Verifying 1.7 on Windows
+
+Things that need a real Riot account, Discord or network and can't run in CI:
+
+1. **Account switch:** with SexyVal open, sign out of the Riot Client and into another account. Within about 5 s the sidebar name, store, collection and MMR change; nothing from the previous account stays on screen.
+2. **Saved sign-in recovery:** with a saved account and the Riot Client closed, disconnect the network for a minute. Settings › Accounts shows "Riot unreachable, retrying", not "needs a new login"; reconnect and it recovers by itself.
+3. **Store proxy:** in a terminal run `warp-cli mode proxy`, then Settings › Network › *Use WARP's proxy* › **Test** (should say "Proxy works"). Pick *Proxy only* and press **Sync now**; the status says "via proxy". Switch WARP back with `warp-cli mode warp` when done. Use this only where your network's rules allow it.
+4. **Discord:** create a Discord application, paste its ID in Settings › Integrations, turn Rich Presence on with Discord running. Start a match: your profile shows mode, map and agent. Close Valorant: the activity disappears. Quit Discord and restart it, then press Reconnect.
+5. **Wishlist:** watch a skin that is in today's store from another account (or wait for a rotation); exactly one notification arrives, and none after restarting SexyVal.
+6. **Lightweight mode:** start Valorant; Settings › Performance shows "Lightweight" and the CPU/memory figures; close Valorant and it returns to Normal.
+7. **Uninstall:** uninstalling asks whether to delete your data (default No); the Vault folder stays unless you say Yes.
 
 ## What changed in 1.4
 
@@ -330,6 +368,7 @@ Built from the docs and verified only against the mock:
 - Console platform values for `X-Riot-ClientPlatform` (only PC is documented).
 - The external-sessions `version` format, and real 429 behaviour.
 - The starting side for queues other than competitive.
+- **1.7:** a real Riot Client account switch while SexyVal runs (simulated with the mock's subject switch only); a real network outage on a saved sign-in; the store proxy against Riot's real pd servers (SOCKS5 + TLS was verified against a public HTTPS host, not against Riot); Discord Rich Presence against the real Discord client (tested against a fake Discord IPC server implementing the same framing); how Discord renders map and agent art from https URLs; the NSIS uninstall prompt; Vault restore/import on the installed app; whether `warp-cli settings` prints the proxy port in proxy mode (the Network tab falls back to 40000).
 
 ## Limits
 

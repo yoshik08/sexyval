@@ -6,6 +6,8 @@ import { assetUrl } from './assets';
 import { readJson, writeJson } from '../paths';
 import { nextFetchAt } from '../../shared/storeArchive';
 import { log } from '../log';
+import type { WishlistStore } from './wishlist';
+import type { WishHit } from '../../shared/wishlist';
 
 export const VP = '85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741';
 export const RAD = 'e59aa87c-4cbf-517a-5983-6e81511be9b7';
@@ -95,7 +97,7 @@ export interface ShopHooks {
   onChange: (v: ShopView) => void;
   onError: (msg: string) => void;
   isOwnedLevel: (levelId: string) => boolean;
-  onWishlistHit: (names: string[]) => void;
+  onWishlistHit: (hits: WishHit[], puuid: string) => void;
   /** Fresh storefront parsed and decorated (feeds the price book). */
   onLoaded?: (view: ShopView) => void;
   /** The raw storefront JSON for this account (feeds the bundle archive and shop history). */
@@ -109,37 +111,50 @@ export class ShopService {
   private timer: NodeJS.Timeout | null = null;
   private puuid: string | null = null;
   private bundleNames = new Map<string, { name: string; icon?: string }>();
-  private wishlist: { skinIds: string[]; notified: string[] } = { skinIds: [], notified: [] };
+  /** Last good store per account (store-cache.json): shown, labeled with its time, when a refresh fails. */
+  private cache: Record<string, ShopView> = {};
 
   constructor(
     private readonly api: RiotApi,
     private readonly assets: AssetService,
     private readonly hooks: ShopHooks,
-    private readonly wishlistFile: string,
+    readonly wish: WishlistStore,
+    private readonly cacheFile: string,
   ) {}
 
-  async loadWishlist(): Promise<string[]> {
-    const w = await readJson<{ skinIds?: string[]; notified?: string[] }>(this.wishlistFile, {});
-    this.wishlist = { skinIds: Array.isArray(w.skinIds) ? w.skinIds : [], notified: Array.isArray(w.notified) ? w.notified : [] };
-    return this.wishlist.skinIds;
+  async loadCache(): Promise<void> {
+    const c = await readJson<Record<string, ShopView>>(this.cacheFile, {});
+    this.cache = c && typeof c === 'object' ? c : {};
+  }
+
+  private get who(): string | null {
+    return this.puuid ?? this.api.session.puuid;
   }
 
   async toggleWish(skinId: string): Promise<string[]> {
-    const id = skinId.toLowerCase();
-    this.wishlist.skinIds = this.wishlist.skinIds.includes(id) ? this.wishlist.skinIds.filter((x) => x !== id) : [...this.wishlist.skinIds, id];
-    await writeJson(this.wishlistFile, this.wishlist);
+    const puuid = this.who;
+    if (!puuid) return this.wish.ids(null);
+    const ids = await this.wish.toggle(puuid, skinId);
     this.decorate();
     this.hooks.onChange(this.view);
-    return this.wishlist.skinIds;
+    return ids;
   }
 
   get wishlistIds(): string[] {
-    return this.wishlist.skinIds;
+    return this.wish.ids(this.who);
   }
 
   start(puuid: string): void {
     if (this.puuid === puuid && this.view.status !== 'idle') return;
+    const switched = this.puuid !== puuid;
     this.puuid = puuid;
+    // Another account: its own cached store (or nothing) right away, never the previous account's.
+    if (switched) {
+      const c = this.cache[puuid];
+      this.view = c ? { ...c, status: 'done', cached: true, error: undefined } : { status: 'idle', daily: [], wallet: null };
+      this.decorate();
+      this.hooks.onChange(this.view);
+    }
     void this.refresh();
   }
 
@@ -175,7 +190,7 @@ export class ShopService {
 
   /** Owned + wishlist flags on every item. */
   private decorate(): void {
-    const wish = new Set(this.wishlist.skinIds);
+    const wish = new Set(this.wish.ids(this.who));
     const mark = (i: ShopItem) => {
       i.owned = i.levelId ? this.hooks.isOwnedLevel(i.levelId) : false;
       i.watched = !!i.skinId && wish.has(i.skinId);
@@ -255,18 +270,22 @@ export class ShopService {
         fetchedAt: Date.now(),
         source,
         v2Status,
+        puuid,
       };
+      this.cache[puuid] = { ...this.view, wallet: this.view.wallet };
+      void writeJson(this.cacheFile, this.cache);
       this.decorate();
       this.hooks.onLoaded?.(this.view);
       this.hooks.onRaw?.(res.json, puuid);
-      this.checkWishlist();
+      this.checkWishlist(puuid);
       this.schedule();
       this.hooks.afterRefresh(prevVp != null && this.view.wallet?.vp !== prevVp);
     } catch (e) {
       if (stale()) return this.view;
       const msg = e instanceof HttpError ? `Shop failed: HTTP ${e.status} on ${e.path}. ${e.body.slice(0, 160)}` : `Shop failed: ${(e as Error).message}`;
-      // Keep the last good items on screen; never a blank page.
-      this.view = { ...this.view, status: 'error', error: `${msg} (raw response in Settings > Debug)` };
+      // Keep the last good items on screen (this account's cache if nothing is showing); never a blank page.
+      const base = this.view.daily.length || !this.cache[puuid] ? this.view : this.cache[puuid];
+      this.view = { ...base, status: 'error', cached: base.daily.length > 0, error: `${msg} (raw response in Settings > Debug)` };
       this.hooks.onError(msg);
       if (this.timer) clearTimeout(this.timer);
       this.timer = setTimeout(() => void this.refresh(), 60_000);
@@ -275,15 +294,10 @@ export class ShopService {
     return this.view;
   }
 
-  private checkWishlist(): void {
-    if (!this.wishlist.skinIds.length) return;
-    const rotation = String(this.view.dailyEndsAt ? Math.round(this.view.dailyEndsAt / 60000) : '');
-    const all = [...this.view.daily, ...(this.view.night?.items ?? []), ...(this.view.bundles ?? []).flatMap((b) => b.items)];
-    const hits = all.filter((i) => i.watched && !this.wishlist.notified.includes(`${i.skinId}:${rotation}`));
-    if (!hits.length) return;
-    this.wishlist.notified = [...this.wishlist.notified, ...hits.map((h) => `${h.skinId}:${rotation}`)].slice(-200);
-    void writeJson(this.wishlistFile, this.wishlist);
-    this.hooks.onWishlistHit(hits.map((h) => h.name));
+  /** Fresh data only (this runs after a successful fetch); deduplicated per store appearance. */
+  private checkWishlist(puuid: string): void {
+    const hits = this.wish.check(puuid, this.view, true);
+    if (hits.length) this.hooks.onWishlistHit(hits, puuid);
   }
 
   /** A minute after the next daily / bundle / night market rotation, and at least hourly (shared/storeArchive.ts). */

@@ -10,6 +10,7 @@ import { saveSettings, useSettings } from '../lib/store';
 import { Img, Panel, Segmented, Skeleton } from '../components/ui';
 import { act, Btn, ErrorNote, PageHeader } from '../components/kit';
 import { MultiLineChart, SERIES, STACK_RAMP } from '../components/charts';
+import { HistoryInsights } from './Insights';
 import { SquadList, STACK_LABEL, StackIcon, StackTiles } from '../components/squad';
 import { PlayerName } from '../components/PlayerName';
 
@@ -518,6 +519,7 @@ export function MmrScreen({ connected, myPuuid, initialQuery, players }: { conne
       )}
       {tv && mode === 'team' && tv.team.estimate.team && <TeamBody tv={tv} loading={loading} />}
       {soloView && (mode === 'solo' || !tv) && <SoloBody view={soloView} loading={loading} />}
+      {soloView?.isMe && <HistoryInsights />}
     </div>
   );
 }

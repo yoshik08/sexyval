@@ -668,3 +668,70 @@ export interface WishlistState {
   skinIds: string[];
   lastHits: { skinId: string; at: number }[];
 }
+
+// ---- Phoenix phases 3–5 ----
+
+/** One signed-in account's last store sync (Settings > Network). */
+export interface AccountSync {
+  puuid: string;
+  label: string;
+  ok: boolean;
+  lastOkAt?: number;
+  lastTryAt: number;
+  error?: string;
+  route?: 'direct' | 'proxy';
+}
+
+export interface NetworkStatus {
+  route: import('./netRoute').RouteStatus;
+  /** Active account's store (from ShopService). */
+  active: { label: string; fetchedAt?: number; cached: boolean; error?: string; status: string } | null;
+  others: AccountSync[];
+  /** Cloudflare WARP as warp-cli reports it (read-only; SexyVal never changes its mode). */
+  warp: { installed: boolean; mode?: string; proxyPort?: number };
+}
+
+export interface WarehouseGroup {
+  key: string;
+  label?: string;
+  games: number;
+  wins: number;
+  losses: number;
+  kd: number;
+  acs: number;
+  rr: number;
+  atk?: [number, number];
+  def?: [number, number];
+}
+
+export interface WarehouseView {
+  puuid: string;
+  queue: string;
+  /** Rows across all queues. */
+  total: number;
+  /** Rows in the selected queue. */
+  matches: number;
+  first?: number;
+  last?: number;
+  updatedAt: number;
+  gaps: { missing: number; oldest?: number; newest?: number };
+  rank: { t: number; tier: number; rr: number; delta: number; matchId: string }[];
+  maps: WarehouseGroup[];
+  agents: WarehouseGroup[];
+  acts: WarehouseGroup[];
+  months: WarehouseGroup[];
+  insights: import('./insights').InsightReport;
+}
+
+export type PerfMode = 'auto' | 'always' | 'normal';
+
+export interface PerfStatus {
+  mode: PerfMode;
+  /** Lightweight right now (always, or auto while Valorant runs). */
+  active: boolean;
+  valorantRunning: boolean;
+  /** Work waiting for Valorant to close. */
+  deferred: string[];
+  /** app.getAppMetrics() summary, sampled on request. */
+  metrics?: { cpuPercent: number; memoryMB: number; processes: number; at: number };
+}

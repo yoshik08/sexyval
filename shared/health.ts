@@ -4,12 +4,12 @@
 export type HealthState = 'healthy' | 'connecting' | 'degraded' | 'offline' | 'auth-required' | 'error';
 
 export interface HealthItem {
-  id: 'riot-client' | 'auth' | 'events' | 'accounts' | 'storage' | 'vault';
+  id: 'riot-client' | 'auth' | 'events' | 'accounts' | 'storage' | 'vault' | 'store' | 'proxy' | 'discord';
   label: string;
   state: HealthState;
   detail: string;
   /** What the user can do about it, when anything. */
-  action?: 'reconnect' | 'sign-in' | 'retry-accounts' | 'start-riot-client' | 'open-vault';
+  action?: 'reconnect' | 'sign-in' | 'retry-accounts' | 'start-riot-client' | 'open-vault' | 'open-network' | 'open-integrations';
 }
 
 export interface HealthInput {
@@ -26,6 +26,12 @@ export interface HealthInput {
   pinned: boolean;
   /** Vault: absent when unavailable (e.g. tests). */
   vault?: { lastSnapshotAt?: number; error?: string; now: number };
+  /** Active account's store. */
+  store?: { status: 'idle' | 'loading' | 'done' | 'error'; cached?: boolean; fetchedAt?: number; error?: string; blocked?: boolean };
+  /** Only when a proxy route is configured. */
+  proxy?: { mode: 'fallback' | 'proxy'; state: 'unused' | 'ok' | 'failed'; error?: string };
+  /** Only when Rich Presence is on. */
+  discord?: { state: 'off' | 'no-client-id' | 'connecting' | 'connected' | 'discord-closed' | 'error'; detail: string };
 }
 
 export interface HealthReport {
@@ -91,6 +97,29 @@ export function computeHealth(h: HealthInput): HealthReport {
           ? { id: 'vault', label: 'Data vault', state: 'connecting', detail: 'First snapshot is taken shortly after start' }
           : { id: 'vault', label: 'Data vault', state: age > 3 * 24 * 60 * 60_000 ? 'degraded' : 'healthy', detail: `Last snapshot ${Math.max(1, Math.round(age / 60_000)) < 120 ? `${Math.max(1, Math.round(age / 60_000))} min` : `${Math.round(age / 3_600_000)} h`} ago` },
     );
+  }
+  if (h.store && h.store.status !== 'idle') {
+    const st = h.store;
+    const when = st.fetchedAt && h.vault ? `${Math.max(1, Math.round((h.vault.now - st.fetchedAt) / 60_000))} min ago` : 'earlier';
+    items.push(
+      st.status === 'error'
+        ? { id: 'store', label: 'Store sync', state: st.blocked ? 'offline' : 'degraded', detail: `${st.cached ? `Showing the store from ${when}. ` : ''}${st.blocked ? 'Riot’s store servers can’t be reached from this network.' : (st.error ?? 'Refresh failed').slice(0, 140)}`, action: st.blocked ? 'open-network' : 'reconnect' }
+        : st.status === 'loading'
+          ? { id: 'store', label: 'Store sync', state: 'connecting', detail: 'Refreshing' }
+          : { id: 'store', label: 'Store sync', state: 'healthy', detail: 'Up to date' },
+    );
+  }
+  if (h.proxy)
+    items.push(
+      h.proxy.state === 'failed'
+        ? { id: 'proxy', label: 'Store proxy', state: h.proxy.mode === 'proxy' ? 'error' : 'degraded', detail: h.proxy.error ?? 'The proxy didn’t answer', action: 'open-network' }
+        : { id: 'proxy', label: 'Store proxy', state: 'healthy', detail: h.proxy.state === 'ok' ? 'Working' : h.proxy.mode === 'fallback' ? 'Standing by (used only if the direct route fails)' : 'Ready' },
+    );
+  if (h.discord && h.discord.state !== 'off') {
+    const d = h.discord;
+    // Discord is optional: a closed Discord is never worse than "degraded".
+    const state: HealthState = d.state === 'connected' ? 'healthy' : d.state === 'connecting' ? 'connecting' : 'degraded';
+    items.push({ id: 'discord', label: 'Discord presence', state, detail: d.detail, action: d.state === 'no-client-id' ? 'open-integrations' : d.state === 'connected' || d.state === 'connecting' ? undefined : 'reconnect' });
   }
   // Overall: what the user is actually blocked by.
   const core = items.filter((i) => i.id === 'auth' || i.id === 'storage');

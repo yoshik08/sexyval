@@ -45,8 +45,11 @@ export function startStores(): void {
   api.on<OwnedState>('owned', ownedStore.set);
   api.on<PriceMap>('prices', pricesStore.set);
   // Boost: while Valorant runs, videos stop and hover previews are off (no GPU use from SexyVal).
+  api.on<string[]>('wishlist', wishlistStore.set);
   api.on<boolean>('quiet', (on) => {
     quietStore.set(on);
+    // Lightweight mode: animations, transitions and backdrop blur off (index.css, html.lite).
+    document.documentElement.classList.toggle('lite', on);
     if (on) document.querySelectorAll('video').forEach((v) => v.pause());
   });
 }

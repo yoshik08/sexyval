@@ -30,6 +30,8 @@ export interface TrimmedDetails {
     adr?: number | null;
     hsPct?: number | null;
     firstBloods?: number | null;
+    /** 1.7+: rounds where this player died first (opening duel lost). Absent in older cached details. */
+    firstDeaths?: number | null;
     avgLoadout?: number | null;
     avgSpent?: number | null;
   }[];
@@ -49,6 +51,7 @@ interface Adv {
   head: number;
   shots: number;
   fb: number;
+  fd: number;
   loadout: number;
   spent: number;
   econRounds: number;
@@ -59,12 +62,12 @@ function advancedStats(rounds: any[]): Map<string, Adv> {
   const m = new Map<string, Adv>();
   const get = (p: string) => {
     let a = m.get(p);
-    if (!a) m.set(p, (a = { dmg: 0, head: 0, shots: 0, fb: 0, loadout: 0, spent: 0, econRounds: 0 }));
+    if (!a) m.set(p, (a = { dmg: 0, head: 0, shots: 0, fb: 0, fd: 0, loadout: 0, spent: 0, econRounds: 0 }));
     return a;
   };
   for (const r of rounds) {
     const stats: any[] = Array.isArray(r?.playerStats) ? r.playerStats : [];
-    let first: { killer: string; t: number } | null = null;
+    let first: { killer: string; victim?: string; t: number } | null = null;
     for (const ps of stats) {
       if (typeof ps?.subject !== 'string') continue;
       const a = get(ps.subject);
@@ -80,10 +83,13 @@ function advancedStats(rounds: any[]): Map<string, Adv> {
       }
       for (const k of Array.isArray(ps.kills) ? ps.kills : []) {
         const t = num(k?.roundTime);
-        if (typeof k?.killer === 'string' && (!first || t < first.t)) first = { killer: k.killer, t };
+        if (typeof k?.killer === 'string' && (!first || t < first.t)) first = { killer: k.killer, victim: typeof k?.victim === 'string' ? k.victim : undefined, t };
       }
     }
-    if (first) get(first.killer).fb++;
+    if (first) {
+      get(first.killer).fb++;
+      if (first.victim) get(first.victim).fd++;
+    }
   }
   return m;
 }
@@ -123,12 +129,13 @@ export function trimDetails(raw: any, fallbackId?: string): TrimmedDetails {
         ...(() => {
           const a = adv.get(p.subject);
           const rp = num(p.stats?.roundsPlayed);
-          if (!hasRounds) return { adr: null, hsPct: null, firstBloods: null, avgLoadout: null, avgSpent: null };
-          if (!a) return { adr: null, hsPct: null, firstBloods: 0, avgLoadout: null, avgSpent: null };
+          if (!hasRounds) return { adr: null, hsPct: null, firstBloods: null, firstDeaths: null, avgLoadout: null, avgSpent: null };
+          if (!a) return { adr: null, hsPct: null, firstBloods: 0, firstDeaths: 0, avgLoadout: null, avgSpent: null };
           return {
             adr: rp > 0 ? Math.round(a.dmg / rp) : null,
             hsPct: a.shots > 0 ? Math.round((a.head / a.shots) * 100) : null,
             firstBloods: a.fb,
+            firstDeaths: a.fd,
             avgLoadout: a.econRounds ? Math.round(a.loadout / a.econRounds) : null,
             avgSpent: a.econRounds ? Math.round(a.spent / a.econRounds) : null,
           };

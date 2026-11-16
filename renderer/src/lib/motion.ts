@@ -8,7 +8,8 @@ import { flushSync } from 'react-dom';
 export const EASE_OUT = 'expo.out';
 
 export function reducedMotion(): boolean {
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Lightweight mode (html.lite) counts as reduced motion: no GSAP work while Valorant runs.
+  return document.documentElement.classList.contains('lite') || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 type VT = { startViewTransition?: (cb: () => void) => { finished: Promise<void> } };

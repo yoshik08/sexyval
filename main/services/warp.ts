@@ -133,6 +133,23 @@ export class WarpService {
     return (await this.exists(WARP_DEFAULT_CLI)) ? WARP_DEFAULT_CLI : null;
   }
 
+  /**
+   * Read-only: WARP's operating mode and proxy port (`warp-cli settings`), for Settings > Network. In
+   * "proxy" mode WARP serves SOCKS5 on 127.0.0.1:<port> (default 40000) instead of tunnelling the whole PC.
+   * SexyVal never switches the mode itself.
+   */
+  async modeInfo(): Promise<{ installed: boolean; mode?: string; proxyPort?: number }> {
+    const cli = this.cli ?? (await this.locate());
+    this.cli = cli;
+    if (!cli) return { installed: false };
+    const r = await this.run(cli, ['settings'], 8000);
+    if (r.spawnError) return { installed: true };
+    const mode = /Mode:\s*([A-Za-z+_]+)/.exec(r.out)?.[1];
+    const line = r.out.split(/\r?\n/).find((l) => /proxy/i.test(l) && /\d{2,5}/.test(l)) ?? '';
+    const port = Number(/(\d{2,5})\s*$/.exec(line.trim())?.[1] ?? /:(\d{2,5})\b/.exec(line)?.[1]);
+    return { installed: true, mode, ...(Number.isInteger(port) && port > 0 && port < 65536 ? { proxyPort: port } : {}) };
+  }
+
   /** Re-reads the real state. Concurrent calls share one check. */
   refresh(): Promise<WarpStatus> {
     this.inflight ??= this.doRefresh().finally(() => (this.inflight = null));

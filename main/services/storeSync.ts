@@ -5,6 +5,9 @@ import type { RiotApi } from '../riot/api';
 import type { AssetService } from './assets';
 import type { PriceBook } from './prices';
 import { log } from '../log';
+import type { WishlistStore } from './wishlist';
+import type { WishHit } from '../../shared/wishlist';
+import type { AccountSync } from '../../shared/features';
 
 export interface SignedInAccounts {
   signedIn(): { id: string; puuid: string; region: string; label: string; status: string }[];
@@ -23,6 +26,10 @@ export interface StoreSyncDeps {
   activeLabel: () => string;
   onNewBundles: (b: ArchivedBundle[]) => void;
   onChange: () => void;
+  wish?: WishlistStore;
+  onWishlistHit?: (hits: WishHit[], puuid: string, label: string) => void;
+  /** Lightweight mode: other accounts wait until Valorant closes (the active store is never delayed). */
+  deferred?: () => boolean;
 }
 
 /**
@@ -36,6 +43,8 @@ export class StoreSync {
   private running: Promise<void> | null = null;
   private lastOthers = 0;
   private stopped = false;
+  /** Per-account result of the last sync (Settings > Network). */
+  readonly accountStatus = new Map<string, AccountSync>();
 
   constructor(private readonly d: StoreSyncDeps) {}
 
@@ -56,6 +65,11 @@ export class StoreSync {
     if (newBundles.length && !firstEver) this.d.onNewBundles(newBundles);
     this.d.onChange();
     this.schedule();
+  }
+
+  private mark(a: { puuid: string; label: string }, r: { ok: boolean; at?: number; error?: string; route?: 'direct' | 'proxy' }): void {
+    const prev = this.accountStatus.get(a.puuid);
+    this.accountStatus.set(a.puuid, { puuid: a.puuid, label: a.label, lastOkAt: r.ok ? r.at : prev?.lastOkAt, lastTryAt: Date.now(), ok: r.ok, error: r.ok ? undefined : r.error, route: r.ok ? r.route : prev?.route });
   }
 
   start(): void {
@@ -95,6 +109,10 @@ export class StoreSync {
   }
 
   private async runOthers(reason: string): Promise<void> {
+    if (this.d.deferred?.() && reason === 'rotation') {
+      log.info('store sync: other accounts deferred (lightweight mode)');
+      return;
+    }
     const accounts = this.d.accounts?.signedIn() ?? [];
     const active = this.d.activePuuid();
     const others = accounts.filter((a) => a.puuid !== active && a.status !== 'expired');
@@ -103,12 +121,20 @@ export class StoreSync {
     for (const a of others) {
       try {
         const t = await this.d.accounts!.tokensFor(a.id);
-        if (!t) continue;
+        if (!t) {
+          this.mark(a, { ok: false, error: 'Waiting for sign-in (network or session)' });
+          continue;
+        }
         const res = await this.d.api.storefrontFor({ ...t, puuid: a.puuid, region: a.region });
         const view = parseStorefront(res.json, this.d.assets);
         this.d.prices.record({ status: 'done', wallet: null, ...view });
         this.ingest(res.json, { id: a.puuid, label: a.label });
+        this.mark(a, { ok: true, at: Date.now(), route: this.d.api.route?.status.lastRoute });
+        const hits = this.d.wish?.check(a.puuid, { status: 'done', wallet: null, ...view }, true) ?? [];
+        if (hits.length) this.d.onWishlistHit?.(hits, a.puuid, a.label);
       } catch (e) {
+        // Saved accounts are never touched on failure: the next rotation (or Reconnect) tries again.
+        this.mark(a, { ok: false, error: (e as Error).message.slice(0, 200) });
         log.warn(`store sync for ${a.label} failed`, e);
       }
     }

@@ -18,7 +18,7 @@ export function useHealth(): HealthReport | null {
 }
 
 /** Popover above the sidebar status pill: every component's state and the one action that helps. */
-export function HealthPanel({ h, onClose, onSettings }: { h: HealthReport; onClose: () => void; onSettings: () => void }) {
+export function HealthPanel({ h, onClose, onSettings }: { h: HealthReport; onClose: () => void; onSettings: (tab?: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -68,8 +68,18 @@ export function HealthPanel({ h, onClose, onSettings }: { h: HealthReport; onClo
           </Btn>
         )}
         {h.items.some((i) => i.action === 'sign-in' || i.action === 'retry-accounts') && (
-          <Btn size="sm" tone="ghost" onClick={onSettings}>
+          <Btn size="sm" tone="ghost" onClick={() => onSettings('accounts')}>
             Accounts…
+          </Btn>
+        )}
+        {h.items.some((i) => i.action === 'open-network') && (
+          <Btn size="sm" tone="ghost" onClick={() => onSettings('network')}>
+            Network…
+          </Btn>
+        )}
+        {h.items.some((i) => i.action === 'open-integrations') && (
+          <Btn size="sm" tone="ghost" onClick={() => onSettings('integrations')}>
+            Discord…
           </Btn>
         )}
       </div>

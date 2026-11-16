@@ -1,3 +1,4 @@
+import { cacheLabel } from '../../../shared/netRoute';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogSkin } from '../../../shared/features';
 import { previewVideo } from '../../../shared/collection';
@@ -121,6 +122,7 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
           <p className="num mt-1.5 h-5 text-sm text-muted">
             {active === 'spending' ? 'VP purchases, money spent and what the account is worth.' : archive ? 'Every store SexyVal has seen, kept after it rotates.' : endsAt ? <>Resets in {countdown(endsAt - now)}</> : null}
             {storeLine && <span className="text-faint"> · {storeLine}</span>}
+            {shop?.cached && !archive && active !== 'spending' && <span className="text-warn"> · Saved store, {cacheLabel(shop.fetchedAt, now).toLowerCase()}</span>}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-5 xl:gap-7">

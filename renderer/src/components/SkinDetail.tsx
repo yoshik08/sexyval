@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { api } from '../lib/api';
 import type { CatalogChroma, CatalogLevel, CatalogSkin } from '../../../shared/features';
 import { chromaOwned, isSkinOwned, levelOwned } from '../../../shared/collection';
 import { cx, fmtNum } from '../lib/format';
@@ -241,6 +242,7 @@ function Body({ skin, ctx }: { skin: CatalogSkin; ctx?: SkinContext }) {
               {wish.includes(skin.id) ? 'Watching' : 'Watch'}
             </Btn>
           </div>
+          {wish.includes(skin.id) && <WishTimes skinId={skin.id} />}
           {owned.status === 'signed-out' && <p className="mt-3 text-xs text-faint">Start the Riot Client or sign in to see what you own.</p>}
         </div>
 
@@ -304,5 +306,20 @@ function Body({ skin, ctx }: { skin: CatalogSkin; ctx?: SkinContext }) {
         )}
       </aside>
     </>
+  );
+}
+
+/** Watching: when this account's store last had it, and when the last alert went out (per account). */
+function WishTimes({ skinId }: { skinId: string }) {
+  const [info, setInfo] = useState<{ skinId: string; lastSeen?: number; lastNotified?: number } | null>(null);
+  useEffect(() => {
+    void api.rpc<{ skinId: string; lastSeen?: number; lastNotified?: number }[]>('wishlist:info').then((l) => setInfo(l.find((x) => x.skinId === skinId) ?? null));
+  }, [skinId]);
+  return (
+    <p className="mt-2 text-xs text-faint">
+      You get one notification each time it appears in this account’s store (daily, bundle or Night Market).
+      {info?.lastSeen ? ` Last in your store ${new Date(info.lastSeen).toLocaleDateString()}.` : ' Not seen in your store since you started watching.'}
+      {info?.lastNotified ? ` Last alert ${new Date(info.lastNotified).toLocaleDateString()}.` : ''}
+    </p>
   );
 }

@@ -68,6 +68,9 @@ const PALETTE: PaletteNav[] = [
   { label: 'Boost', hint: 'Settings', view: 'settings', sub: 'boost' },
   { label: 'Diagnostics', hint: 'Settings', view: 'settings', sub: 'debug' },
   { label: 'Data & Recovery (vault, backup)', hint: 'Settings', view: 'settings', sub: 'data' },
+  { label: 'Network (store proxy)', hint: 'Settings', view: 'settings', sub: 'network' },
+  { label: 'Discord Rich Presence', hint: 'Settings', view: 'settings', sub: 'integrations' },
+  { label: 'Performance (lightweight mode)', hint: 'Settings', view: 'settings', sub: 'performance' },
 ];
 
 function Wordmark() {
@@ -190,7 +193,7 @@ function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View, tab?:
         </div>
       </div>
       <div className="relative mt-3">
-        {healthOpen && health && <HealthPanel h={health} onClose={() => setHealthOpen(false)} onSettings={() => (setHealthOpen(false), go('settings', 'accounts'))} />}
+        {healthOpen && health && <HealthPanel h={health} onClose={() => setHealthOpen(false)} onSettings={(tab) => (setHealthOpen(false), go('settings', tab ?? 'accounts'))} />}
         <ConnectionPill conn={conn} onClick={() => setHealthOpen((o) => !o)} warn={health && health.overall !== 'healthy' && conn?.status === 'connected' ? health.summary : undefined} />
       </div>
     </nav>
