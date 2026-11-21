@@ -4,12 +4,12 @@
 export type HealthState = 'healthy' | 'connecting' | 'degraded' | 'offline' | 'auth-required' | 'error';
 
 export interface HealthItem {
-  id: 'riot-client' | 'auth' | 'events' | 'accounts' | 'storage' | 'vault' | 'store' | 'proxy' | 'discord';
+  id: 'riot-client' | 'auth' | 'events' | 'accounts' | 'storage' | 'vault' | 'store' | 'proxy';
   label: string;
   state: HealthState;
   detail: string;
   /** What the user can do about it, when anything. */
-  action?: 'reconnect' | 'sign-in' | 'retry-accounts' | 'start-riot-client' | 'open-vault' | 'open-network' | 'open-integrations';
+  action?: 'reconnect' | 'sign-in' | 'retry-accounts' | 'start-riot-client' | 'open-vault' | 'open-network';
 }
 
 export interface HealthInput {
@@ -31,7 +31,6 @@ export interface HealthInput {
   /** Only when a proxy route is configured. */
   proxy?: { mode: 'fallback' | 'proxy'; state: 'unused' | 'ok' | 'failed'; error?: string };
   /** Only when Rich Presence is on. */
-  discord?: { state: 'off' | 'no-client-id' | 'connecting' | 'connected' | 'discord-closed' | 'error'; detail: string };
 }
 
 export interface HealthReport {
@@ -115,12 +114,6 @@ export function computeHealth(h: HealthInput): HealthReport {
         ? { id: 'proxy', label: 'Store proxy', state: h.proxy.mode === 'proxy' ? 'error' : 'degraded', detail: h.proxy.error ?? 'The proxy didn’t answer', action: 'open-network' }
         : { id: 'proxy', label: 'Store proxy', state: 'healthy', detail: h.proxy.state === 'ok' ? 'Working' : h.proxy.mode === 'fallback' ? 'Standing by (used only if the direct route fails)' : 'Ready' },
     );
-  if (h.discord && h.discord.state !== 'off') {
-    const d = h.discord;
-    // Discord is optional: a closed Discord is never worse than "degraded".
-    const state: HealthState = d.state === 'connected' ? 'healthy' : d.state === 'connecting' ? 'connecting' : 'degraded';
-    items.push({ id: 'discord', label: 'Discord presence', state, detail: d.detail, action: d.state === 'no-client-id' ? 'open-integrations' : d.state === 'connected' || d.state === 'connecting' ? undefined : 'reconnect' });
-  }
   // Overall: what the user is actually blocked by.
   const core = items.filter((i) => i.id === 'auth' || i.id === 'storage');
   let overall = core.reduce((w, i) => (RANK[i.state] > RANK[w] ? i.state : w), 'healthy' as HealthState);

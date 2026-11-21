@@ -14,7 +14,7 @@ export function liteActive(mode: PerfMode, valorantRunning: boolean, boostQuiet:
 
 /**
  * What lightweight mode changes (shown in Settings and the docs). Essential live work never waits:
- * the game loop, Live screen, overlay, account switching, the active account's store and Discord presence.
+ * the game loop, Live screen, overlay, account switching and the active account's store.
  */
 export const LITE_EFFECTS = [
   'Animations, blur and hover video previews off',

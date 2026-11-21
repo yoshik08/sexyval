@@ -9,16 +9,15 @@ import { WarningCircle } from '../lib/icons';
 import { Bar, BetaTag, Btn, Note, PageHeader } from '../components/kit';
 import { BoostTab, StretchTab } from './SystemSettings';
 import { DataRecoveryTab } from './DataRecovery';
-import { IntegrationsTab, NetworkTab, PerformanceTab } from './PhoenixSettings';
+import { NetworkTab, PerformanceTab } from './PhoenixSettings';
 import { PlayerName } from '../components/PlayerName';
 
-type Tab = 'general' | 'accounts' | 'data' | 'network' | 'integrations' | 'performance' | 'stretch' | 'boost' | 'debug';
+type Tab = 'general' | 'accounts' | 'data' | 'network' | 'performance' | 'stretch' | 'boost' | 'debug';
 const TABS: [Tab, ReactNode][] = [
   ['general', 'General'],
   ['accounts', 'Accounts'],
   ['data', 'Data & Recovery'],
   ['network', 'Network'],
-  ['integrations', 'Integrations'],
   ['performance', 'Performance'],
   [
     'stretch',
@@ -41,7 +40,6 @@ export function SettingsScreen({ state, initialTab }: { state: AppState | null; 
       {tab === 'accounts' && <Accounts state={state} />}
       {tab === 'data' && <DataRecoveryTab />}
       {tab === 'network' && <NetworkTab />}
-      {tab === 'integrations' && <IntegrationsTab />}
       {tab === 'performance' && <PerformanceTab />}
       {tab === 'stretch' && <StretchTab />}
       {tab === 'boost' && <BoostTab />}

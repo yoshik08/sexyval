@@ -12,8 +12,6 @@ import { NetRouter, socks5Agent } from '../main/riot/netRoute';
 import { isBlockedError, parseProxy } from '../shared/netRoute';
 import { accountOf, matchOffers, migrateWish, type Offer } from '../shared/wishlist';
 import { WishlistStore } from '../main/services/wishlist';
-import { buildActivity, DEFAULT_PRIVACY, discordBackoff, validClientId } from '../shared/presence';
-import { decodeFrames, DiscordPresence, encodeFrame } from '../main/services/discord';
 import { mergeRows, rowFromDetails, sideOfRound, gapsOf } from '../shared/warehouse';
 import { WarehouseService } from '../main/services/warehouse';
 import { computeInsights, MIN_ELIGIBLE, wilson } from '../shared/insights';
@@ -230,85 +228,6 @@ describe('Wishlist per account (F7)', () => {
   });
 });
 
-describe('Discord Rich Presence (F5)', () => {
-  const pipeName = (tag: string) => `\\\\?\\pipe\\sv-test-discord-${process.pid}-${tag}`;
-  function fakeDiscord(name: string) {
-    const frames: { op: number; data: any }[] = [];
-    const conns = new Set<net.Socket>();
-    const srv = net.createServer((c) => {
-      conns.add(c);
-      let buf = Buffer.alloc(0);
-      c.on('data', (chunk) => {
-        const r = decodeFrames(Buffer.concat([buf, chunk]));
-        buf = r.rest as Buffer<ArrayBuffer>;
-        for (const f of r.frames) {
-          frames.push(f);
-          if (f.op === 0) c.write(encodeFrame(1, { evt: 'READY', data: { v: 1 } }));
-        }
-      });
-      c.on('close', () => conns.delete(c));
-      c.on('error', () => undefined);
-    });
-    return { srv, frames, conns, listen: () => new Promise<void>((r) => srv.listen(name, () => r())) };
-  }
-  const running = (on: boolean) => ({ valorantRunning: on, state: { phase: 'ingame' as const, coregame: { matchId: 'm', mode: '', modeName: 'Competitive', queueId: 'competitive', queueTag: 'comp', myTeamId: 'Blue', myTeam: [{ puuid: ME, isMe: true, incognito: false, teamId: 'Blue', last5: {} as any, agent: { id: 'a', name: 'Jett' }, name: 'Yoshi', tag: '767' }], enemyTeam: [], map: { id: 'm', name: 'Ascent' } } }, phaseSince: 1_700_000_000_000 });
-
-  it('never shows the Riot ID or hidden data, and only what privacy allows', () => {
-    const a = buildActivity(running(true) as any, DEFAULT_PRIVACY)!;
-    expect(JSON.stringify(a)).not.toMatch(/Yoshi|767/);
-    expect(a.details).toBe('Competitive · Ascent');
-    expect(a.state).toBe('In a match · Jett');
-    expect(buildActivity(running(true) as any, { ...DEFAULT_PRIVACY, map: false, agent: false })!.details).toBe('Competitive');
-    expect(buildActivity(running(false) as any, DEFAULT_PRIVACY)).toBeNull();
-    expect(validClientId('123')).toBe(false);
-    expect(validClientId('123456789012345678')).toBe(true);
-    expect([0, 1, 2, 3, 4, 5].map(discordBackoff)).toEqual([15_000, 30_000, 60_000, 120_000, 300_000, null]);
-  });
-
-  it('enable → activity, Valorant closes → cleared at once, disable → cleared and disconnected', async () => {
-    const name = pipeName('a');
-    const d = fakeDiscord(name);
-    await d.listen();
-    const cfg = { enabled: true, clientId: '123456789012345678', privacy: DEFAULT_PRIVACY };
-    const p = new DiscordPresence(() => cfg, undefined, (i) => net.connect(i === 0 ? name : pipeName('none')));
-    p.update(running(true) as any);
-    p.apply();
-    await until(() => p.status.state === 'connected');
-    await until(() => d.frames.some((f) => f.data?.cmd === 'SET_ACTIVITY' && f.data.args.activity));
-    expect(d.frames[0]).toMatchObject({ op: 0, data: { client_id: '123456789012345678' } });
-    p.update(running(false) as any); // within the 15 s rate window: clearing still goes out now
-    await until(() => d.frames.filter((f) => f.data?.cmd === 'SET_ACTIVITY').at(-1)?.data.args.activity === null);
-    p.update(running(true) as any);
-    cfg.enabled = false;
-    p.apply();
-    expect(p.status.state).toBe('off');
-    await until(() => d.conns.size === 0);
-    d.srv.close();
-  });
-
-  it('Discord quitting leaves no stale activity, and Reconnect picks it up again', async () => {
-    const name = pipeName('b');
-    let d = fakeDiscord(name);
-    await d.listen();
-    const p = new DiscordPresence(() => ({ enabled: true, clientId: '123456789012345678', privacy: DEFAULT_PRIVACY }), undefined, () => net.connect(name));
-    p.update(running(true) as any);
-    p.apply();
-    await until(() => p.status.state === 'connected' && !!p.status.activity);
-    for (const c of d.conns) c.destroy();
-    d.srv.close();
-    await until(() => p.status.state === 'discord-closed');
-    expect(p.status.activity).toBeNull();
-    d = fakeDiscord(name);
-    await d.listen();
-    p.reconnect();
-    await until(() => p.status.state === 'connected');
-    await until(() => d.frames.some((f) => f.data?.cmd === 'SET_ACTIVITY'));
-    p.shutdown();
-    await until(() => d.conns.size === 0);
-    d.srv.close();
-  });
-});
-
 function match(id: string, t: number, opts: { me?: string; won?: boolean; map?: string; agent?: string; queue?: string; fd?: number; atkWin?: number } = {}): TrimmedDetails {
   const me = opts.me ?? ME;
   const won = opts.won ?? true;
@@ -427,13 +346,12 @@ describe('Lightweight mode and health (F10/F6)', () => {
     expect(liteActive('normal', true, true)).toBe(true);
   });
 
-  it('store, proxy and Discord states are explained; Discord never blocks the app', () => {
+  it('store and proxy states are explained', () => {
     const base = { riotClient: 'up' as const, lockfile: true, tokenSource: 'riot-client' as const, connStatus: 'connected' as const, events: 'connected' as const, accounts: [], accountsReadOnly: false, pinned: false, vault: { lastSnapshotAt: 1, now: 2 } };
     expect(computeHealth(base).overall).toBe('healthy');
-    const h = computeHealth({ ...base, store: { status: 'error', cached: true, fetchedAt: 1, blocked: true }, proxy: { mode: 'fallback', state: 'failed', error: 'refused' }, discord: { state: 'discord-closed', detail: 'Discord isn’t running' } });
+    const h = computeHealth({ ...base, store: { status: 'error', cached: true, fetchedAt: 1, blocked: true }, proxy: { mode: 'fallback', state: 'failed', error: 'refused' }});
     expect(h.items.find((i) => i.id === 'store')).toMatchObject({ state: 'offline', action: 'open-network' });
     expect(h.items.find((i) => i.id === 'proxy')).toMatchObject({ state: 'degraded' });
-    expect(h.items.find((i) => i.id === 'discord')).toMatchObject({ state: 'degraded', action: 'reconnect' });
     expect(h.overall).toBe('degraded');
   });
 });

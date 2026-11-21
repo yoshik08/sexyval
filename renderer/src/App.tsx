@@ -1,32 +1,46 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import type { AppState, Connection, View } from '../../shared/types';
 import type { UiResumeState } from '../../shared/update';
 import { api } from './lib/api';
 import { cx } from './lib/format';
 import { MagnifyingGlass, Broadcast, Compass, Crosshair, FilmStrip, Gauge, GearSix, MapPin, Medal, SquaresFour, Storefront, Target, UserCircle, UsersThree, type IconProps } from './lib/icons';
-import { withViewTransition } from './lib/motion';
 import { openPlayer, playerNavStore, startStores, useLoadoutDirty, useSettings, useStore, useVideoPlaying } from './lib/store';
-import { MmrScreen } from './screens/Mmr';
+import { MmrScreen as MmrScreenRaw } from './screens/Mmr';
 import { Toasts } from './components/ui';
 import { closeSkin, SkinDetail } from './components/SkinDetail';
-import { Btn } from './components/kit';
+import { Btn, clearRpcCache } from './components/kit';
 import { WarpRow } from './components/warp';
 import { CommandPalette, type PaletteNav } from './components/CommandPalette';
 import { WhatsNew } from './components/WhatsNew';
 import { VaultTip } from './screens/DataRecovery';
 import { HealthPanel, useHealth } from './components/HealthPanel';
 import { LiveScreen } from './screens/Live';
-import { ShopScreen } from './screens/Shop';
+import { ShopScreen as ShopScreenRaw } from './screens/Shop';
 import { SettingsScreen } from './screens/Settings';
-import { CollectionScreen } from './screens/Collection';
-import { ProgressScreen } from './screens/Progress';
-import { PartyScreen } from './screens/Party';
-import { LoadoutScreen } from './screens/Loadout';
-import { ProfilesScreen } from './screens/Profiles';
-import { HubScreen } from './screens/Hub';
-import { LineupsScreen } from './screens/Lineups';
-import { ReplaysScreen } from './screens/Replays';
-import { MasteryScreen } from './screens/Mastery';
+import { CollectionScreen as CollectionScreenRaw } from './screens/Collection';
+import { ProgressScreen as ProgressScreenRaw } from './screens/Progress';
+import { PartyScreen as PartyScreenRaw } from './screens/Party';
+import { LoadoutScreen as LoadoutScreenRaw } from './screens/Loadout';
+import { ProfilesScreen as ProfilesScreenRaw } from './screens/Profiles';
+import { HubScreen as HubScreenRaw } from './screens/Hub';
+import { LineupsScreen as LineupsScreenRaw } from './screens/Lineups';
+import { ReplaysScreen as ReplaysScreenRaw } from './screens/Replays';
+import { MasteryScreen as MasteryScreenRaw } from './screens/Mastery';
+
+// Game state arrives every few seconds. Only Live (and Settings' diagnostics) read it; every other
+// screen takes a few primitives, so memo keeps a state push from re-rendering a whole grid.
+const ShopScreen = memo(ShopScreenRaw);
+const CollectionScreen = memo(CollectionScreenRaw);
+const ProgressScreen = memo(ProgressScreenRaw);
+const PartyScreen = memo(PartyScreenRaw);
+const LoadoutScreen = memo(LoadoutScreenRaw);
+const ProfilesScreen = memo(ProfilesScreenRaw);
+const MmrScreen = memo(MmrScreenRaw);
+const HubScreen = memo(HubScreenRaw);
+const LineupsScreen = memo(LineupsScreenRaw);
+const ReplaysScreen = memo(ReplaysScreenRaw);
+const MasteryScreen = memo(MasteryScreenRaw);
+const NO_PLAYERS: never[] = [];
 
 type NavItem = { id: View; label: string; Icon: ComponentType<IconProps> };
 // Groups are separated by space only: no section labels above anything.
@@ -71,7 +85,6 @@ const PALETTE: PaletteNav[] = [
   { label: 'Diagnostics', hint: 'Settings', view: 'settings', sub: 'debug' },
   { label: 'Data & Recovery (vault, backup)', hint: 'Settings', view: 'settings', sub: 'data' },
   { label: 'Network (store proxy)', hint: 'Settings', view: 'settings', sub: 'network' },
-  { label: 'Discord Rich Presence', hint: 'Settings', view: 'settings', sub: 'integrations' },
   { label: 'Performance (lightweight mode)', hint: 'Settings', view: 'settings', sub: 'performance' },
 ];
 
@@ -114,7 +127,7 @@ function ConnectionPill({ conn, onClick, warn }: { conn?: Connection; onClick: (
   );
 }
 
-function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View, tab?: string) => void; conn?: Connection; onSearch: () => void }) {
+const Sidebar = memo(function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View, tab?: string) => void; conn?: Connection; onSearch: () => void }) {
   const wrap = useRef<HTMLDivElement>(null);
   const highlight = useRef<HTMLSpanElement>(null);
   // Mirrors `view` for the ResizeObserver/font callbacks below, so `measure` can stay referentially
@@ -200,7 +213,7 @@ function Sidebar({ view, go, conn, onSearch }: { view: View; go: (v: View, tab?:
       </div>
     </nav>
   );
-}
+});
 
 interface Alert {
   kind: 'session-expired';
@@ -279,14 +292,33 @@ export function App() {
     }
   }, [view]);
 
-  const go = (v: View, tab?: string) => {
-    if (v === view && tab === sub) return;
+  // Stable across renders (memoized children and the key handler never go stale). The swap is instant:
+  // the new screen's own content eases in (.screen-in), nothing snapshots the window or blocks input.
+  const navRef = useRef({ view, sub });
+  navRef.current = { view, sub };
+  const go = useCallback((v: View, tab?: string) => {
+    if (v === navRef.current.view && tab === navRef.current.sub) return;
     closeSkin();
-    withViewTransition(() => {
-      setView(v);
-      setSub(tab);
-    });
-  };
+    setView(v);
+    setSub(tab);
+    if (v !== navRef.current.view && scrollRef.current && pendingScroll.current == null) scrollRef.current.scrollTop = 0;
+  }, []);
+  const openSearch = useCallback(() => setPalette(true), []);
+  const toLoadout = useCallback(() => go('loadout'), [go]);
+  const hubProfile = useCallback(
+    (q: string) => {
+      setProfileQuery(q);
+      setProfileTab('history');
+      go('profiles');
+    },
+    [go],
+  );
+
+  // Cached screen data belongs to one account: drop it when the signed-in account changes.
+  const puuid = state?.conn.puuid;
+  const lastPuuid = useRef(puuid);
+  if (puuid && lastPuuid.current && puuid !== lastPuuid.current) clearRpcCache();
+  if (puuid) lastPuuid.current = puuid;
 
   // A Live row's "Full profile" / "Estimated MMR" opens that player by PUUID (no Name#Tag round-trip).
   useEffect(() => {
@@ -318,20 +350,29 @@ export function App() {
     };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  });
+  }, [go]);
 
   const connected = state?.conn.status === 'connected';
   const valorant = !!state?.conn.valorant;
-  const matchPlayers = [...(state?.pregame?.allies ?? []), ...(state?.coregame?.myTeam ?? []), ...(state?.coregame?.enemyTeam ?? [])];
+  const pregameAllies = state?.pregame?.allies;
+  const coreMine = state?.coregame?.myTeam;
+  const coreEnemy = state?.coregame?.enemyTeam;
+  const matchPlayers = useMemo(() => {
+    const all = [...(pregameAllies ?? []), ...(coreMine ?? []), ...(coreEnemy ?? [])];
+    return all.length ? all : NO_PLAYERS;
+    // Content key: the loop hands over fresh arrays every tick even when nobody changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify([pregameAllies, coreMine, coreEnemy])]);
 
   return (
     <div className="flex h-full">
-      <Sidebar view={view} go={go} conn={state?.conn} onSearch={() => setPalette(true)} />
+      <Sidebar view={view} go={go} conn={state?.conn} onSearch={openSearch} />
       <main className="relative min-w-0 flex-1 overflow-hidden">
         {/* window drag strip; stops short of the native window controls */}
         <div className="drag absolute inset-x-0 top-0 z-20 h-10 pr-[148px]" />
         <div ref={scrollRef} className={cx('h-full pt-10 [scrollbar-gutter:stable]', view === 'collection' ? 'overflow-hidden' : 'overflow-y-auto')}>
-          {view === 'live' && <LiveScreen state={state} onLoadout={() => go('loadout')} />}
+          <div key={view} className={cx('screen-in', view === 'collection' && 'h-full')}>
+          {view === 'live' && <LiveScreen state={state} onLoadout={toLoadout} />}
           {view === 'shop' && <ShopScreen initialTab={sub === 'night' || sub === 'bundles' || sub === 'past' || sub === 'history' || sub === 'spending' ? sub : 'daily'} connected={connected} myPuuid={state?.conn.puuid} />}
           {view === 'collection' && <CollectionScreen />}
           {view === 'loadout' && <LoadoutScreen connected={connected} />}
@@ -344,17 +385,14 @@ export function App() {
               connected={connected}
               riotClient={state?.conn.riotClient === 'up'}
               initialTab={sub as any}
-              onProfile={(q) => {
-                setProfileQuery(q);
-                setProfileTab('history');
-                go('profiles');
-              }}
+              onProfile={hubProfile}
             />
           )}
           {view === 'lineups' && <LineupsScreen initialTab={sub === 'mine' || sub === 'library' ? sub : undefined} />}
           {view === 'replays' && <ReplaysScreen connected={connected} />}
           {view === 'mastery' && <MasteryScreen myPuuid={state?.conn.puuid ?? undefined} />}
           {view === 'settings' && <SettingsScreen state={state} initialTab={(sub as any) ?? 'general'} />}
+          </div>
         </div>
       </main>
       <SkinDetail />

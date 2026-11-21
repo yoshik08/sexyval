@@ -3,7 +3,6 @@ import type { Settings } from '../shared/types';
 import { dataDir, readJson, writeJson } from './paths';
 import { CURRENT_SETTINGS_VERSION, loginItemOutOfSync, migrateStartupDefault } from '../shared/settingsMigration';
 import { TWEAKS } from '../shared/boost';
-import { DEFAULT_PRIVACY } from '../shared/presence';
 
 const DEFAULTS: Settings = {
   settingsVersion: CURRENT_SETTINGS_VERSION,
@@ -37,9 +36,6 @@ const DEFAULTS: Settings = {
   boostTweaks: {},
   netMode: 'direct',
   proxyUrl: '',
-  discordEnabled: false,
-  discordClientId: '',
-  discordPrivacy: { ...DEFAULT_PRIVACY },
   perfMode: 'auto',
 };
 
@@ -63,7 +59,9 @@ const file = () => dataDir('settings.json');
 export async function loadSettings(): Promise<Settings> {
   const s = await readJson<Partial<Settings>>(file(), {});
   const migration = migrateStartupDefault(s);
-  current = { ...DEFAULTS, ...s, discordPrivacy: { ...DEFAULTS.discordPrivacy, ...(s.discordPrivacy ?? {}) }, settingsVersion: migration.settingsVersion, launchAtStartup: migration.launchAtStartup, window: { ...DEFAULTS.window, ...(s.window ?? {}) } };
+  // Discord Rich Presence was removed in 1.9: drop its old keys so they are never written back.
+  for (const k of ['discordEnabled', 'discordClientId', 'discordPrivacy']) delete (s as Record<string, unknown>)[k];
+  current = { ...DEFAULTS, ...s, settingsVersion: migration.settingsVersion, launchAtStartup: migration.launchAtStartup, window: { ...DEFAULTS.window, ...(s.window ?? {}) } };
   if (app.isPackaged) {
     if (migration.shouldRegister) app.setLoginItemSettings({ openAtLogin: current.launchAtStartup, args: ['--hidden'] });
     else syncLoginItem();
@@ -133,13 +131,6 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   if (patch.netMode === 'direct' || patch.netMode === 'fallback' || patch.netMode === 'proxy') next.netMode = patch.netMode;
   // Shape only; parseProxy (shared/netRoute.ts) enforces loopback when the route is used and in Settings.
   if (typeof patch.proxyUrl === 'string' && patch.proxyUrl.length <= 200 && /^[!-~]*$/.test(patch.proxyUrl.trim())) next.proxyUrl = patch.proxyUrl.trim();
-  if (typeof patch.discordEnabled === 'boolean') next.discordEnabled = patch.discordEnabled;
-  if (typeof patch.discordClientId === 'string' && /^\d{0,20}$/.test(patch.discordClientId.trim())) next.discordClientId = patch.discordClientId.trim();
-  if (patch.discordPrivacy && typeof patch.discordPrivacy === 'object') {
-    const p = { ...current.discordPrivacy };
-    for (const k of Object.keys(DEFAULT_PRIVACY) as (keyof typeof p)[]) if (typeof (patch.discordPrivacy as any)[k] === 'boolean') p[k] = (patch.discordPrivacy as any)[k];
-    next.discordPrivacy = p;
-  }
   if (patch.perfMode === 'auto' || patch.perfMode === 'always' || patch.perfMode === 'normal') next.perfMode = patch.perfMode;
   if (typeof patch.henrikKey === 'string' && patch.henrikKey.length <= 200 && !patch.henrikKey.startsWith(KEY_MASK)) next.henrikKey = patch.henrikKey.trim();
   if (next.launchAtStartup !== current.launchAtStartup && app.isPackaged) {

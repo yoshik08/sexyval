@@ -405,7 +405,7 @@ html.lite .material-thick {
 /* ---------- View transitions ---------- */
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation-duration: 220ms;
+  animation-duration: 180ms;
   animation-timing-function: var(--ease-out);
 }
 ::view-transition-old(root) {
@@ -423,7 +423,18 @@ html.lite .material-thick {
   from {
     opacity: 0;
     transform: translateY(6px);
-    filter: blur(2px);
+  }
+}
+/* Sidebar navigation: the new screen swaps in at once (no snapshot, input never blocked) and only its
+   own content eases in, on the compositor. No fill mode: once it ends the wrapper has no transform, so
+   position: fixed children (popovers, the Loadout apply bar) are relative to the window again. */
+.screen-in {
+  animation: screen-in 170ms var(--ease-out);
+}
+@keyframes screen-in {
+  from {
+    opacity: 0.001;
+    transform: translateY(4px);
   }
 }
 /* Sheet open/close: the page stays put, the sheet and scrim fade, the render travels. */

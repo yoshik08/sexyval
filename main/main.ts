@@ -53,7 +53,6 @@ import { computeHealth, type HealthReport } from '../shared/health';
 import { NetRouter } from './riot/netRoute';
 import { httpRequest } from './riot/http';
 import { WishlistStore } from './services/wishlist';
-import { DiscordPresence } from './services/discord';
 import { WarehouseService } from './services/warehouse';
 import { MasteryService } from './services/mastery';
 import type { ActRef, AgentMeta } from '../shared/mastery';
@@ -170,6 +169,26 @@ function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+// Game state is pushed after every poll (1-5 s). Only a real change reaches the renderer (lastPollAt is
+// the only field that moves on a quiet poll and nothing shows it), and nothing is sent while the window
+// is hidden or minimized: the newest state goes out the moment it is shown again.
+let stateKey = '';
+let heldState: AppState | null = null;
+function sendState(s: AppState): void {
+  const key = JSON.stringify(s, (k, v) => (k === 'lastPollAt' ? undefined : v));
+  if (key === stateKey) return;
+  if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) {
+    heldState = s;
+    return;
+  }
+  stateKey = key;
+  heldState = null;
+  win.webContents.send('state', s);
+}
+function flushHeldState(): void {
+  if (heldState) sendState(heldState);
+}
+
 function toast(level: Toast['level'], message: string): void {
   const now = Date.now();
   if (now - (recentToasts.get(message) ?? 0) < 30_000) return;
@@ -246,6 +265,13 @@ function createWindow(): BrowserWindow {
   });
   w.on('resize', saveBounds);
   w.on('move', saveBounds);
+  w.on('show', flushHeldState);
+  w.on('restore', flushHeldState);
+  // A reload (dev) or a renderer crash recovery starts from nothing: resend the next state in full.
+  w.webContents.on('did-finish-load', () => {
+    stateKey = '';
+    if (loop) sendState(loop.state);
+  });
   w.on('close', (e) => {
     if (!quitting && getSettings().closeToTray && !SHOTS) {
       e.preventDefault();
@@ -512,12 +538,8 @@ async function startServices(): Promise<void> {
     const p = session.puuid;
     if (p) deferWhileLite('mastery', () => void mastery.refresh(p).catch((e) => log.warn(`mastery refresh (${why}) failed`, e)));
   };
-  const discord = new DiscordPresence(() => ({ enabled: getSettings().discordEnabled, clientId: getSettings().discordClientId, privacy: getSettings().discordPrivacy }), () => pushHealth());
-  beforeQuit.push(async () => discord.shutdown());
-  discord.apply();
   if (process.env.SEXYVAL_PERF_LOG) perfSampler.startLog(process.env.SEXYVAL_PERF_LOG, () => (quiet ? 'lite' : 'normal'));
-  let presencePhase = '';
-  let phaseSince = Date.now();
+  let lastPhase = '';
   // Friend watch: watched friends coming online / finishing a match, from the Riot Client's local chat API.
   setInterval(() => {
     if (quiet) return;
@@ -535,17 +557,15 @@ async function startServices(): Promise<void> {
     names,
     shop,
     emit: (s: AppState) => {
-      send('state', s);
-      if (s.phase !== presencePhase) {
-        if (presencePhase === 'ingame' && s.phase !== 'ingame') {
+      sendState(s);
+      if (s.phase !== lastPhase) {
+        if (lastPhase === 'ingame' && s.phase !== 'ingame') {
           setTimeout(() => ingestSoon('match end'), 90_000).unref?.();
           // Riot grants MP once the match is processed; ask again a little later.
           setTimeout(() => masterySoon('match end'), 120_000).unref?.();
         }
-        presencePhase = s.phase;
-        phaseSince = s.phase === 'queue' && s.queue?.enteredAt ? s.queue.enteredAt : Date.now();
+        lastPhase = s.phase;
       }
-      discord.update({ valorantRunning: session.valorantRunning, state: s, phaseSince });
       pushHealth();
       overlay.update(s);
       onPhase(s);
@@ -585,7 +605,6 @@ async function startServices(): Promise<void> {
       vault: vault ? { ...vault.quickHealth(), now: Date.now() } : undefined,
       store: shop ? { status: shop.view.status, cached: shop.view.cached, fetchedAt: shop.view.fetchedAt, error: shop.view.error, blocked: shop.view.status === 'error' && netRouter.status.lastBlocked === true } : undefined,
       proxy: getSettings().netMode !== 'direct' ? { mode: getSettings().netMode as 'fallback' | 'proxy', state: netRouter.status.proxyState, error: netRouter.status.proxyError } : undefined,
-      discord: getSettings().discordEnabled ? discord.status : undefined,
     });
   };
   pushHealth = () => {
@@ -705,12 +724,6 @@ async function startServices(): Promise<void> {
       await shop?.refresh();
       await storeSync?.syncOthers('manual');
       return true;
-    },
-    // ---- Discord Rich Presence (Settings > Integrations) ----
-    'discord:status': () => discord.status,
-    'discord:reconnect': () => {
-      discord.reconnect();
-      return discord.status;
     },
     // ---- Agent Mastery. The renderer names the account it shows: a mismatch means it switched. ----
     'mastery:get': (puuid: unknown) => {
@@ -890,7 +903,6 @@ async function startServices(): Promise<void> {
     'health:reconnect': () => {
       session.reset();
       netRouter.reset();
-      if (getSettings().discordEnabled) discord.reconnect();
       void shop?.refresh();
       events?.stop();
       events?.start();
@@ -972,7 +984,6 @@ async function startServices(): Promise<void> {
     if (s.overlayPosition !== prev.overlayPosition || s.overlayScale !== prev.overlayScale || s.overlayDisplay !== prev.overlayDisplay) overlay.relayout();
     if (s.overlayEnabled && !prev.overlayEnabled) void checkDisplayMode();
     if (s.netMode !== prev.netMode || s.proxyUrl !== prev.proxyUrl) netRouter.reset();
-    if (s.discordEnabled !== prev.discordEnabled || s.discordClientId !== prev.discordClientId || JSON.stringify(s.discordPrivacy) !== JSON.stringify(prev.discordPrivacy)) discord.apply();
     if (s.henrikKey !== prev.henrikKey) void offers.refresh(catalog.catalog, true).then(sendPrices);
   });
 }

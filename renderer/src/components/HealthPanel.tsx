@@ -77,11 +77,6 @@ export function HealthPanel({ h, onClose, onSettings }: { h: HealthReport; onClo
             Network…
           </Btn>
         )}
-        {h.items.some((i) => i.action === 'open-integrations') && (
-          <Btn size="sm" tone="ghost" onClick={() => onSettings('integrations')}>
-            Discord…
-          </Btn>
-        )}
       </div>
     </div>
   );

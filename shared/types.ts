@@ -268,10 +268,6 @@ export interface Settings {
   /** Smart Store Sync route (Settings > Network). proxyUrl: loopback only (socks5:// or http://). */
   netMode: 'direct' | 'fallback' | 'proxy';
   proxyUrl: string;
-  /** Discord Rich Presence (Settings > Integrations). Off by default; clientId = your Discord application ID. */
-  discordEnabled: boolean;
-  discordClientId: string;
-  discordPrivacy: { map: boolean; agent: boolean; rank: boolean; party: boolean; elapsed: boolean; mode: boolean };
   /** Lightweight background mode (Settings > Performance). auto = while Valorant runs. */
   perfMode: 'auto' | 'always' | 'normal';
 }

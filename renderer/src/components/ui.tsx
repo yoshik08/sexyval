@@ -21,6 +21,9 @@ export function Img({ src, alt, className, fallback, ...rest }: { src?: string; 
       src={src}
       alt={alt}
       draggable={false}
+      // Decode off the main thread and leave off-screen art until it scrolls near (callers can override).
+      decoding="async"
+      loading="lazy"
       ref={(el) => {
         if (el?.complete && el.naturalWidth > 0 && loaded !== src) setLoaded(src);
       }}

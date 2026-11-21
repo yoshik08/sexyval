@@ -2,15 +2,11 @@ import { useEffect, useState } from 'react';
 import type { NetworkStatus, PerfStatus } from '../../../shared/features';
 import type { Settings } from '../../../shared/types';
 import { parseProxy, cacheLabel } from '../../../shared/netRoute';
-import { validClientId } from '../../../shared/presence';
 import { LITE_EFFECTS } from '../../../shared/perf';
-import { api } from '../lib/api';
 import { ago, cx } from '../lib/format';
 import { saveSettings, useSettings } from '../lib/store';
-import { Panel, Segmented, Skeleton, showToast, Toggle } from '../components/ui';
+import { Panel, Segmented, Skeleton, showToast } from '../components/ui';
 import { act, Btn, ErrorNote, Note } from '../components/kit';
-
-type DiscordStatus = { state: string; detail: string; activity: { details?: string; state?: string } | null; lastUpdateAt?: number };
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -134,67 +130,6 @@ export function NetworkTab() {
         )}
       </section>
       <Note>A failed sync never signs an account out or clears its store: the last good store stays on screen with the time it was fetched, and the next rotation tries again. Use a proxy only where your network’s rules allow it.</Note>
-    </div>
-  );
-}
-
-// ---------------- Integrations (Discord Rich Presence) ----------------
-const PRIVACY: [keyof Settings['discordPrivacy'], string, string][] = [
-  ['mode', 'Game mode', 'Competitive, Unrated…'],
-  ['map', 'Map', 'Shown once the map is known'],
-  ['agent', 'Your agent', 'Only after you lock in'],
-  ['party', 'Party size', 'When you’re in a party of 2+'],
-  ['elapsed', 'Elapsed time', 'Time in queue or in the match'],
-  ['rank', 'Your rank', 'Off by default'],
-];
-
-export function IntegrationsTab() {
-  const s = useSettings();
-  const [st, setSt] = useState<DiscordStatus | null>(null);
-  const [id, setId] = useState('');
-  useEffect(() => setId(s?.discordClientId ?? ''), [s?.discordClientId]);
-  useEffect(() => {
-    const t = () => void api.rpc<DiscordStatus>('discord:status').then(setSt);
-    t();
-    const h = setInterval(t, 3000);
-    return () => clearInterval(h);
-  }, []);
-  if (!s) return <Skeleton className="h-72" />;
-  const idOk = validClientId(id);
-  return (
-    <div className="flex flex-col gap-6">
-      <Panel className="divide-y divide-white/[0.06] px-6">
-        <Toggle checked={s.discordEnabled} onChange={(on) => void saveSettings({ discordEnabled: on })} label="Discord Rich Presence" hint="Shows what you’re playing on your Discord profile. Turns on and off instantly." />
-        <div className="py-4">
-          <div className="text-sm text-ink">Discord application ID</div>
-          <div className="mt-0.5 text-xs text-muted">Create an application at discord.com/developers/applications (its name is what Discord shows, e.g. “VALORANT”) and paste its Application ID.</div>
-          <input value={id} onChange={(e) => setId(e.target.value.replace(/\D/g, ''))} onBlur={() => void saveSettings({ discordClientId: id })} placeholder="1234567890123456789" className="field mt-3 w-72 font-mono text-xs" inputMode="numeric" />
-          {id && !idOk && <p className="mt-2 text-xs text-warn">An application ID is 17–20 digits.</p>}
-        </div>
-        {st && s.discordEnabled && (
-          <div className="flex items-center justify-between gap-4 py-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm text-ink">
-                <span className={cx('h-2 w-2 rounded-full', st.state === 'connected' ? 'bg-win' : st.state === 'connecting' ? 'bg-faint' : 'bg-warn')} />
-                {st.detail}
-              </div>
-              <div className="mt-0.5 truncate text-xs text-muted">{st.activity ? `Showing: ${[st.activity.details, st.activity.state].filter(Boolean).join(' — ')}` : 'Showing nothing (Valorant isn’t running)'}</div>
-            </div>
-            <Btn size="sm" tone="ghost" onClick={() => void api.rpc<DiscordStatus>('discord:reconnect').then(setSt)}>
-              Reconnect
-            </Btn>
-          </div>
-        )}
-      </Panel>
-      <section>
-        <h2 className="t-head mb-3 px-1 text-md text-ink">What Discord may show</h2>
-        <Panel className="divide-y divide-white/[0.06] px-6">
-          {PRIVACY.map(([k, label, hint]) => (
-            <Toggle key={k} checked={s.discordPrivacy[k]} onChange={(on) => void saveSettings({ discordPrivacy: { ...s.discordPrivacy, [k]: on } })} label={label} hint={hint} />
-          ))}
-        </Panel>
-      </section>
-      <Note>Never shown: your Riot ID, other players, enemy agents or anything Valorant hides. When Valorant closes or you turn this off, the activity is cleared at once.</Note>
     </div>
   );
 }
