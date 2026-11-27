@@ -40,6 +40,62 @@ export const REAL_AUTH_URLS: AuthUrls = {
 };
 
 const REAUTH_EVERY = 50 * 60 * 1000;
+
+/**
+ * How long a Riot sign-in cookie is kept on disk. Riot sends `ssid` without an expiry unless "Stay signed
+ * in" was ticked, and Electron never writes such session cookies to disk: every app restart (an
+ * auto-update, a reboot) silently signed those accounts out. Re-saving the sign-in cookies with an expiry
+ * keeps them across restarts; each successful re-auth (every ~50 min) refreshes them, so Riot's own
+ * server-side session is still what decides whether a sign-in is valid.
+ */
+const KEEP_SIGNED_IN_S = 30 * 86400;
+
+/** The cookies.set() call that keeps a session-only Riot sign-in cookie on disk, or null if it needs none. */
+export function persistentCookie(c: Electron.Cookie, nowMs: number): Electron.CookiesSetDetails | null {
+  if (!c.session && c.expirationDate) return null;
+  if (!isUploadableCookie({ name: c.name, domain: c.domain ?? '' })) return null;
+  return cookieSetDetails(c, nowMs / 1000 + KEEP_SIGNED_IN_S);
+}
+
+/** A cookies.set() call that recreates `c` exactly (host-only stays host-only), with the given expiry. */
+export function cookieSetDetails(c: Electron.Cookie, expirationDate: number): Electron.CookiesSetDetails {
+  const host = (c.domain ?? '').replace(/^\./, '');
+  return {
+    url: `https://${host}${c.path ?? '/'}`,
+    name: c.name,
+    value: c.value,
+    domain: c.hostOnly ? undefined : c.domain,
+    path: c.path ?? '/',
+    secure: c.secure ?? true,
+    httpOnly: c.httpOnly ?? false,
+    sameSite: c.sameSite,
+    expirationDate,
+  };
+}
+
+/**
+ * Riot's cookie re-auth fails now and then on a perfectly good session (community measurements: 7–9% of
+ * attempts, and the next try usually works). One login-page answer therefore isn't "signed out": retry
+ * after 2 min, then 6 min, and only the third login page in a row marks the account expired.
+ */
+export const LOGIN_RETRY_MS = [2 * 60_000, 6 * 60_000] as const;
+export function loginPageAction(consecutive: number): { expire: true } | { expire: false; retryInMs: number } {
+  return consecutive > LOGIN_RETRY_MS.length ? { expire: true } : { expire: false, retryInMs: LOGIN_RETRY_MS[consecutive - 1] };
+}
+
+/**
+ * Cookie lookups ask for what a browser would send to Riot's authorize URL. NOT `{ domain: 'riotgames.com' }`:
+ * Electron's domain filter returns that domain and its parents only, never subdomains, so it silently missed
+ * `ssid`, which lives on auth.riotgames.com (the web store reported "No Riot session cookie" for everyone).
+ */
+const RIOT_AUTH_ORIGIN = 'https://auth.riotgames.com/';
+
+/** Riot's login page has its own "Stay signed in" box; the window title points at it. */
+const SIGN_IN_TITLE = 'Sign in with Riot · tick “Stay signed in”';
+// The window keeps the title we give it, not the page's <title>.
+const keepTitle = (win: BrowserWindow) => win.on('page-title-updated', (e) => e.preventDefault());
+
+const SIGNED_OUT_ON_RESTART = 'Riot’s session ended when SexyVal closed (“Stay signed in” wasn’t ticked). Sign in again; it now stays signed in.';
 /** Offline retries: 30 s, 1, 2, 4, 8, 15 min, then every 15 min. Nothing ever deletes the account. */
 export function offlineBackoff(attempt: number): number {
   return Math.min(15 * 60_000, 30_000 * 2 ** Math.max(0, attempt));
@@ -77,6 +133,8 @@ export class AccountManager implements SignInProvider {
   private timer: NodeJS.Timeout | null = null;
   /** Offline backoff per account: attempts so far and when the next try is due. */
   private offline = new Map<string, { attempts: number; next: number; timer?: NodeJS.Timeout }>();
+  /** Login-page answers in a row per account (see loginPageAction) and the pending retry. */
+  private loginFails = new Map<string, { count: number; timer?: NodeJS.Timeout }>();
   /** accounts.json was there but unreadable at start: never overwrite it with what we have in memory. */
   private readOnly = false;
 
@@ -106,9 +164,80 @@ export class AccountManager implements SignInProvider {
     this.accounts = Array.isArray(d.accounts) ? d.accounts : [];
     this.activeId = d.activeId && this.accounts.some((a) => a.id === d.activeId) ? d.activeId : (this.accounts[0]?.id ?? null);
     for (const a of this.accounts) this.status.set(a.id, 'pending');
+    await this.checkSessionsOnDisk();
     this.timer = setInterval(() => {
       if (this.activeId) void this.silentReauth(this.activeId);
     }, REAUTH_EVERY);
+  }
+
+  /**
+   * An account whose partition has no `ssid` can't sign in silently: say so at start instead of showing
+   * "Ready" (it used to look signed in while the Riot Client was supplying tokens). Also keeps any
+   * session-only sign-in cookie that is still in memory.
+   */
+  private async checkSessionsOnDisk(): Promise<void> {
+    if (!this.realRiot) return; // the mock's sign-in cookies live on 127.0.0.1, not riotgames.com
+    for (const a of this.accounts) {
+      const sso = await this.ssoSnapshot(a.id);
+      if (!sso.some((c) => c.name === 'ssid')) {
+        this.status.set(a.id, 'expired');
+        this.errors.set(a.id, SIGNED_OUT_ON_RESTART);
+      }
+    }
+  }
+
+  private cookieJar(id: string) {
+    return electronSession.fromPartition(this.partition(id)).cookies;
+  }
+
+  /** The Riot sign-in cookies in an account's partition (ssid and the few re-auth sends with it). */
+  private async ssoSnapshot(id: string): Promise<Electron.Cookie[]> {
+    try {
+      const all = await this.cookieJar(id).get({ url: RIOT_AUTH_ORIGIN });
+      return all.filter((c) => isUploadableCookie({ name: c.name, domain: c.domain ?? '' }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Signing in against Riot itself (not the mock server). */
+  private get realRiot(): boolean {
+    try {
+      return new URL(this.urls.authorize).hostname.endsWith('riotgames.com');
+    } catch {
+      return false;
+    }
+  }
+
+  /** Re-saves session-only Riot sign-in cookies with an expiry so they survive a restart (see KEEP_SIGNED_IN_S). */
+  private async keepSignedIn(id: string): Promise<void> {
+    if (!this.realRiot) return;
+    const jar = this.cookieJar(id);
+    const now = Date.now();
+    let n = 0;
+    for (const c of await this.ssoSnapshot(id)) {
+      const d = persistentCookie(c, now);
+      if (!d) continue;
+      await jar.set(d).then(() => n++, (e) => log.warn(`keeping ${c.name} failed`, e));
+    }
+    if (n) {
+      await jar.flushStore().catch(() => undefined);
+      log.info(`kept ${n} session-only Riot sign-in cookie(s) across restarts`);
+    }
+  }
+
+  /** Puts back the sign-in cookies a failed re-auth's login page may have replaced or cleared. */
+  private async restoreSso(id: string, snap: Electron.Cookie[]): Promise<void> {
+    const jar = this.cookieJar(id);
+    const keepUntil = Date.now() / 1000 + KEEP_SIGNED_IN_S;
+    for (const c of snap) await jar.set(cookieSetDetails(c, c.expirationDate ?? keepUntil)).catch(() => undefined);
+    await jar.flushStore().catch(() => undefined);
+  }
+
+  private clearLoginFails(id: string): void {
+    const f = this.loginFails.get(id);
+    if (f?.timer) clearTimeout(f.timer);
+    this.loginFails.delete(id);
   }
 
   stop(): void {
@@ -182,13 +311,14 @@ export class AccountManager implements SignInProvider {
     const win = new BrowserWindow({
       width: 480,
       height: 760,
-      title: 'Sign in with Riot',
+      title: SIGN_IN_TITLE,
       autoHideMenuBar: true,
       backgroundColor: '#0b0e13',
       // Capture runs must never take focus (the game may be running); the mock login needs no window.
       show: !(process.env.SEXYVAL_SCREENSHOTS || process.env.SEXYVAL_LIVE_SHOTS),
       webPreferences: { partition: this.partition(id), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
+    keepTitle(win);
     const pending = this.capture(win, null);
     void win.loadURL(this.urls.authorize).catch(() => undefined);
     const r = await pending;
@@ -199,6 +329,7 @@ export class AccountManager implements SignInProvider {
     const acct: StoredAccount = { id, addedAt: Date.now() };
     try {
       await this.complete(acct, r);
+      await this.keepSignedIn(id);
     } catch (e) {
       log.warn('sign-in completion failed', e);
       await electronSession.fromPartition(this.partition(id)).clearStorageData().catch(() => undefined);
@@ -251,6 +382,8 @@ export class AccountManager implements SignInProvider {
         this.status.set(id, 'recovering');
         this.onChange();
       }
+      // What the sign-in cookies were before this try: a login-page answer can replace or clear them.
+      const before = await this.ssoSnapshot(id);
       const win = new BrowserWindow({ show: false, webPreferences: { partition: this.partition(id), contextIsolation: true, nodeIntegration: false, sandbox: true } });
       const seen = { lastUrl: '', loadFailed: false, finishedLoads: 0 };
       win.webContents.on('did-finish-load', () => {
@@ -271,6 +404,23 @@ export class AccountManager implements SignInProvider {
       if (outcome === 'login-required') {
         this.clearOffline(id);
         this.tokens.delete(id);
+        const fails = (this.loginFails.get(id)?.count ?? 0) + 1;
+        const action = loginPageAction(fails);
+        if (before.some((c) => c.name === 'ssid')) await this.restoreSso(id, before);
+        if (!action.expire && before.some((c) => c.name === 'ssid')) {
+          // Probably Riot's intermittent re-auth failure, not a signed-out session: keep it and try again.
+          const prev = this.loginFails.get(id);
+          if (prev?.timer) clearTimeout(prev.timer);
+          const timer = setTimeout(() => void this.silentReauth(id), action.retryInMs);
+          timer.unref?.();
+          this.loginFails.set(id, { count: fails, timer });
+          this.status.set(id, 'recovering');
+          this.errors.set(id, `Riot didn’t accept the session just now (it does that sometimes). Trying again in ${Math.round(action.retryInMs / 60_000)} min.`);
+          log.info(`account ${acct.name ?? '?'}: login page on re-auth (${fails} in a row); retrying in ${Math.round(action.retryInMs / 1000)} s`);
+          this.onChange();
+          return false;
+        }
+        this.clearLoginFails(id);
         this.status.set(id, 'expired');
         this.errors.set(id, 'Riot asked to log in again. Your account and its data are kept.');
         log.info(`account ${acct.name ?? '?'}: Riot needs a new sign-in`);
@@ -285,6 +435,8 @@ export class AccountManager implements SignInProvider {
       try {
         await this.complete(acct, r!);
         this.clearOffline(id);
+        this.clearLoginFails(id);
+        await this.keepSignedIn(id);
         this.save();
         this.onChange();
         return true;
@@ -333,6 +485,7 @@ export class AccountManager implements SignInProvider {
   /** Waiting out an offline backoff: don't open another hidden window on every token request. */
   private waiting(id: string): boolean {
     const o = this.offline.get(id);
+    if (this.loginFails.get(id)?.timer) return true; // a login-page retry is already scheduled
     return this.status.get(id) === 'offline' && !!o && Date.now() < o.next;
   }
 
@@ -367,7 +520,7 @@ export class AccountManager implements SignInProvider {
   async ssoCookies(id: string): Promise<ValCookie[]> {
     const all = await electronSession
       .fromPartition(this.partition(id))
-      .cookies.get({ domain: 'riotgames.com' })
+      .cookies.get({ url: RIOT_AUTH_ORIGIN })
       .catch(() => [] as Electron.Cookie[]);
     return all
       .filter((c) => isUploadableCookie({ name: c.name, domain: c.domain ?? '' }))
@@ -414,6 +567,7 @@ export class AccountManager implements SignInProvider {
 
   async remove(id: string): Promise<void> {
     this.clearOffline(id);
+    this.clearLoginFails(id);
     this.accounts = this.accounts.filter((a) => a.id !== id);
     this.tokens.delete(id);
     this.status.delete(id);
@@ -428,13 +582,16 @@ export class AccountManager implements SignInProvider {
   async signInAgain(id: string): Promise<boolean> {
     const acct = this.accounts.find((a) => a.id === id);
     if (!acct) return false;
-    const win = new BrowserWindow({ width: 480, height: 760, title: 'Sign in with Riot', autoHideMenuBar: true, webPreferences: { partition: this.partition(id), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const win = new BrowserWindow({ width: 480, height: 760, title: SIGN_IN_TITLE, autoHideMenuBar: true, webPreferences: { partition: this.partition(id), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    keepTitle(win);
     const pending = this.capture(win, null);
     void win.loadURL(this.urls.authorize).catch(() => undefined);
     const r = await pending;
     if (!r) return false;
     await this.complete(acct, r);
+    await this.keepSignedIn(id);
     this.clearOffline(id);
+    this.clearLoginFails(id);
     this.save();
     this.onChange();
     return true;

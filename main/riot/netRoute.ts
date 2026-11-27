@@ -110,7 +110,9 @@ export class NetRouter {
   /** Runs one store request on the configured route. `fn` must pass the dispatcher to its requests. */
   async run<T>(fn: (dispatcher?: Dispatcher) => Promise<T>): Promise<T> {
     const { mode, proxyUrl } = this.cfg();
-    if (mode === 'direct') return this.direct(fn);
+    // No proxy entered: there is nothing to route through, so go direct. ("Proxy only" with an empty
+    // proxy field used to fail every store request with "No proxy is set", forever.)
+    if (mode === 'direct' || !proxyUrl.trim()) return this.direct(fn);
     if (mode === 'proxy') return this.viaProxy(proxyUrl, fn);
     if (this.now() < this.directBlockedUntil) {
       try {

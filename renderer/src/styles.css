@@ -42,7 +42,9 @@ body,
 
 body {
   @apply bg-bg font-sans text-base text-ink antialiased;
-  font-variant-numeric: tabular-nums;
+  /* Proportional figures in running text: tabular ones give every digit a zero's width, so prose like
+     "Lv 119" or "#5659" picked up gaps. Columns, counters and prices opt in with .num / .t-num / tables. */
+  font-variant-numeric: normal;
   font-optical-sizing: auto;
   text-rendering: optimizeLegibility;
   overflow: hidden;
@@ -121,6 +123,16 @@ select option {
 }
 
 /* ---------- Type ---------- */
+/* One display voice. Archivo is variable-width: every use runs at 112% so headings, numbers and labels
+   share one width (headings at 100% next to 112% titles read as cramped, at random). Tracking tightens
+   only on large titles; text at heading size and below keeps the face's own spacing. */
+.font-display {
+  font-stretch: 112%;
+}
+td,
+th {
+  font-variant-numeric: tabular-nums;
+}
 /* Archivo is a variable-width face: titles run expanded (like SF Pro Expanded), tracking tightens with size. */
 .t-display {
   font-family: 'Archivo Variable', system-ui, sans-serif;
@@ -134,22 +146,22 @@ select option {
   font-family: 'Archivo Variable', system-ui, sans-serif;
   font-stretch: 112%;
   font-weight: 700;
-  letter-spacing: -0.024em;
+  letter-spacing: -0.02em;
   line-height: 1.08;
   text-wrap-style: balance; /* style only: `text-wrap` would also reset wrapping and break `truncate` */
 }
 .t-head {
   font-family: 'Archivo Variable', system-ui, sans-serif;
-  font-stretch: 100%;
+  font-stretch: 112%;
   font-weight: 650;
-  letter-spacing: -0.018em;
-  line-height: 1.15;
+  letter-spacing: -0.004em;
+  line-height: 1.2;
 }
 .t-num {
   font-family: 'Archivo Variable', system-ui, sans-serif;
   font-stretch: 112%;
   font-weight: 660;
-  letter-spacing: -0.012em;
+  letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 .num {
@@ -161,6 +173,8 @@ select option {
 }
 .uppercase {
   text-transform: none;
+  /* Its tracking was meant for capitals; on mixed-case text it only opened random gaps. */
+  letter-spacing: 0;
 } /* legacy screens set uppercase labels; the new language is sentence case */
 .text-pretty {
   text-wrap-style: pretty;

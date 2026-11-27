@@ -227,7 +227,7 @@ export class ValWebSync {
     try {
       const cookies = await this.d.ssoCookies(acct.id);
       if (!cookies.some((c) => c.name.toLowerCase() === 'ssid')) {
-        s.lastError = 'No Riot session cookie yet — open after a successful sign-in.';
+        s.lastError = 'Your saved Riot sign-in has no session right now. Settings → Accounts → Sign in again (it stays signed in from now on), then Sync now.';
         await this.save();
         this.d.onChange();
         return;

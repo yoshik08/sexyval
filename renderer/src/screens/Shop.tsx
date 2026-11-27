@@ -150,7 +150,9 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
       {options.length > 1 && <Segmented className="mt-6" value={active} options={options} onChange={setTab} />}
 
       <div className="mt-6">
-        {shop?.status === 'error' && !archive && active !== 'spending' && <ErrorNote>{shop.error}</ErrorNote>}
+        {/* Only when there is no store to show: a saved store already says "Saved store, fetched …" above and
+            the next refresh retries by itself, so a red banner over it never went away. */}
+        {shop?.status === 'error' && !shop.daily.length && !archive && active !== 'spending' && <ErrorNote>{shop.error}</ErrorNote>}
 
         {active === 'spending' ? (
           <SpendingPanel wallet={shop?.wallet?.vp} />
@@ -173,7 +175,7 @@ export function ShopScreen({ initialTab, connected, myPuuid }: { initialTab: Tab
                     {b.icon && <Img src={b.icon} alt="" className="h-16 w-16 shrink-0 rounded-2xl bg-white/[0.04] object-cover" />}
                     <div className="min-w-0">
                       <h2 className="t-title truncate text-[length:clamp(20px,1vw_+_10px,24px)]">{b.name}</h2>
-                      <p className="mt-1 text-sm text-muted">
+                      <p className="num mt-1 text-sm text-muted">
                         {b.items.length} skin{b.items.length === 1 ? '' : 's'}
                         {b.endsAt ? ` · ends in ${countdown(b.endsAt - now)}` : ''}
                       </p>

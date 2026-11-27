@@ -127,6 +127,17 @@ describe('Smart Store Sync routing (F4)', () => {
     expect(used).toBe(0);
   });
 
+  it('"Proxy only" or "Direct, then proxy" with no proxy entered goes direct instead of failing every request', async () => {
+    for (const mode of ['proxy', 'fallback'] as const) {
+      let used = 0;
+      const router = new NetRouter(() => ({ mode, proxyUrl: '  ' }), (p) => (used++, socks5Agent(p)));
+      await expect(router.run(async (d) => (d === undefined ? 'direct' : 'proxy'))).resolves.toBe('direct');
+      expect(used).toBe(0);
+      expect(router.status.lastRoute).toBe('direct');
+      expect(router.status.proxyError).toBeUndefined();
+    }
+  });
+
   it('a misconfigured proxy is reported, never silently skipped', async () => {
     const router = new NetRouter(() => ({ mode: 'proxy', proxyUrl: 'socks5://192.168.1.2:1080' }));
     await expect(router.run(async () => 'x')).rejects.toThrow(/Only a proxy running on this PC/);

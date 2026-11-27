@@ -145,7 +145,7 @@ export function Segmented<T extends string>({ value, options, onChange, classNam
           role="tab"
           aria-selected={v === value}
           onClick={() => onChange(v)}
-          className={cx('press relative z-10 rounded-full px-3.5 text-sm font-medium', v === value ? 'text-ink' : 'text-muted hover:text-ink')}
+          className={cx('press relative z-10 whitespace-nowrap rounded-full px-3.5 text-sm font-medium', v === value ? 'text-ink' : 'text-muted hover:text-ink')}
         >
           {label}
         </button>

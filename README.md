@@ -4,9 +4,25 @@ Personal, unofficial Valorant companion for Windows, in a normal desktop window,
 
 > Not affiliated with Riot Games. Uses unofficial endpoints (valapidocs.techchrism.me / valorant-api-types) that can change or break at any time. Personal use only. No instalock, no gameplay automation; the only overlay is the optional agent-select pill (map + starting side) described below. Agent select/lock endpoints are deliberately not implemented. Party, queue and loadout changes only happen when you press a button.
 
-## What's new in 2.0
+## What's new in 2.0.1
 
 Installed copies update themselves; the installer below is only for a first install.
+
+### You stay signed in
+- **Saved Riot accounts no longer sign out on their own.** Riot only keeps a sign-in when "Stay signed in" is ticked, and SexyVal lost unticked ones every time it restarted (each auto-update, every reboot). It now keeps your sign-in across restarts either way. Accounts already signed out show **Sign in again** (they used to look "Ready"); sign in once more and it sticks.
+- **A Riot hiccup is no longer a sign-out.** Riot turns away a good session now and then; SexyVal now tries again after 2 and 6 minutes before asking you to sign in.
+
+### Web store
+- **Works with your signed-in account.** It said "No Riot session cookie" even when you were signed in; it now finds your sign-in.
+- **One switch.** Settings → Network → Web store is a single on/off switch. Off means nothing is sent anywhere; turning it off deletes your sign-in and store from the server.
+
+### Store
+- **"Shop failed: No proxy is set" is gone.** With "Proxy only" picked but no proxy entered, every store refresh failed and the banner never cleared. With no proxy entered, the store now just connects directly. A failed refresh no longer covers the store you already have with a red banner.
+
+### Text
+- **Even spacing everywhere.** Headings, numbers and labels share one type setting, so spacing no longer changes from screen to screen; numbers in sentences no longer get gaps; settings switches no longer wrap onto two lines.
+
+## What's new in 2.0
 
 ### Your store on your phone: yoshik.xyz/val
 - **See today's store without your PC.** Settings → Network → Web store (needs an account signed in under Settings → Accounts, not just the Riot Client). Turn it on, read what it shares, and type the code it shows at **yoshik.xyz/val** on your phone, once. The page shows your daily four, Night Market, bundles and wallet, in the same look as the Store tab, and it refreshes at the daily reset even on days SexyVal and your PC are off.
@@ -21,8 +37,8 @@ Installed copies update themselves; the installer below is only for a first inst
 
 ## Install
 
-- `release/SexyVal-Setup-2.0.0.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
-- `release/SexyVal-Portable-2.0.0.exe` runs without installing.
+- `release/SexyVal-Setup-2.0.1.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
+- `release/SexyVal-Portable-2.0.1.exe` runs without installing.
 
 The builds are unsigned, so Windows SmartScreen will warn. Click "More info", then "Run anyway".
 

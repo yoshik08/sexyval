@@ -7,7 +7,7 @@ import { LITE_EFFECTS } from '../../../shared/perf';
 import { ago, cx } from '../lib/format';
 import { api } from '../lib/api';
 import { saveSettings, useSettings } from '../lib/store';
-import { Panel, Segmented, Skeleton, showToast } from '../components/ui';
+import { Panel, Segmented, Skeleton, showToast, Toggle } from '../components/ui';
 import { act, Btn, ErrorNote, Note } from '../components/kit';
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -38,7 +38,7 @@ export function NetworkTab() {
   return (
     <div className="flex flex-col gap-6">
       <Panel className="divide-y divide-white/[0.06] px-6">
-        <Row label="Store connection" hint="Applies to store and wallet requests only. Sign-in and live game data always go direct.">
+        <Row label="Store connection" hint={s.netMode !== 'direct' && !s.proxyUrl.trim() ? 'No proxy entered below, so store requests go direct.' : 'Applies to store and wallet requests only. Sign-in and live game data always go direct.'}>
           <Segmented
             size="sm"
             value={s.netMode}
@@ -139,17 +139,18 @@ export function NetworkTab() {
 }
 
 const CONSENT = [
-  'SexyVal sends a Riot session key (the cookies that keep you signed in — never your password) to a server I run on Cloudflare.',
-  'The server stores that key encrypted and uses it only to fetch your own store, at the daily reset, on days this app is closed.',
-  'Your store (skin IDs, prices, rotation date) is kept for up to 48 hours so the page can show it. No other player, no match data, no purchases.',
-  'The key stays usable while you open SexyVal every so often (about once a month). If it expires, the server deletes it and the page asks you to open SexyVal again.',
-  'This uses Riot’s unofficial game-client store endpoint, not an official Riot API. Turning it on is your choice; turning it off deletes the key and your store from the server immediately.',
+  'SexyVal sends your Riot sign-in cookies (the ones that keep you signed in, never your password) to a server I run on Cloudflare.',
+  'The server keeps them encrypted and uses them only to fetch your own store at the daily reset, on days this app is closed.',
+  'Your store (skins, prices, wallet) is kept for up to 48 hours so the page can show it. Nothing about other players, no matches, no purchases.',
+  'It keeps working while you open SexyVal about once a month. Turning this off deletes the cookies and your store from the server right away.',
+  'It uses Riot’s unofficial game-client store endpoint, not an official Riot API.',
 ];
 
 // ---------------- yoshik.xyz/val (web store sync) ----------------
+// One switch owns the feature: off = nothing is sent anywhere; on = consent, then a phone code.
 function ValWebPanel() {
   const [st, setSt] = useState<ValWebStatus | null>(null);
-  const [stage, setStage] = useState<'idle' | 'consent'>('idle');
+  const [consenting, setConsenting] = useState(false);
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -163,144 +164,110 @@ function ValWebPanel() {
     };
   }, []);
 
-  const connect = async () => {
+  const run = async (method: string, ...args: unknown[]) => {
     setBusy(true);
-    const r = await act<ValWebStatus>('val:connect', true);
-    setBusy(false);
-    if (r.ok) {
-      setSt(r.data);
-      setStage('idle');
-      setAgree(false);
-    } else showToast(r.error, 'error');
-  };
-  const disconnect = async () => {
-    if (!window.confirm('Disconnect /val? Your session key and saved store are deleted from the server right away.')) return;
-    setBusy(true);
-    const r = await act<ValWebStatus>('val:disconnect');
+    const r = await act<ValWebStatus>(method, ...args);
     setBusy(false);
     if (r.ok) setSt(r.data);
     else showToast(r.error, 'error');
+    return r.ok;
+  };
+  const linked = !!st?.linked;
+  const on = linked || consenting;
+  const flip = async (v: boolean) => {
+    if (v) return setConsenting(true);
+    setConsenting(false);
+    setAgree(false);
+    if (linked && window.confirm('Turn off the web store? Your Riot cookies and saved store are deleted from the server right away.')) await run('val:disconnect');
+  };
+  const connect = async () => {
+    if (await run('val:connect', true)) {
+      setConsenting(false);
+      setAgree(false);
+    }
   };
   const copy = (text: string, what: string) => void navigator.clipboard?.writeText(text).then(() => showToast(`${what} copied`)).catch(() => undefined);
 
-  const codeLive = st?.code && (st.codeExpiresAt ?? 0) > now;
+  const codeLive = !!st?.code && (st.codeExpiresAt ?? 0) > now;
   const codeMins = st?.codeExpiresAt ? Math.max(0, Math.ceil((st.codeExpiresAt - now) / 60000)) : 0;
+  const hint = !on
+    ? 'Off. Nothing is sent anywhere.'
+    : !linked
+      ? 'Read this first, then get your phone code.'
+      : st?.lastError
+        ? 'On, but not updating: see below.'
+        : st?.lastKeyAt
+          ? `On · updated ${ago(st.lastKeyAt)}${st.keyValidUntil ? ` · works until ${st.keyValidUntil}` : ''}`
+          : 'On · sending your sign-in…';
 
   return (
     <section>
-      <div className="mb-3 flex items-center gap-2 px-1">
-        <h2 className="t-head text-md text-ink">Web store · yoshik.xyz/val</h2>
-        {st?.linked && <span className="rounded-full bg-win/15 px-2 py-0.5 text-2xs font-semibold text-win">Connected</span>}
-      </div>
+      <h2 className="t-head mb-3 px-1 text-md text-ink">Web store</h2>
+      <Panel className="divide-y divide-white/[0.06] px-6">
+        <Toggle checked={on} onChange={(v) => void flip(v)} label="Show my store at yoshik.xyz/val" hint={hint} />
 
-      {!st?.linked && stage === 'idle' && (
-        <Panel className="px-6 py-5">
-          <p className="text-pretty text-sm text-muted">
-            See this account’s daily store from your phone at <span className="text-ink">yoshik.xyz/val</span> — even on days you don’t open SexyVal or Valorant.{' '}
-            <span className="text-ink">It sends your Riot sign-in cookies to a server</span>, so read the details before you turn it on.
-          </p>
-          <div className="mt-4">
-            <Btn tone="primary" size="sm" onClick={() => setStage('consent')}>
-              Set up /val…
-            </Btn>
-          </div>
-        </Panel>
-      )}
-
-      {!st?.linked && stage === 'consent' && (
-        <Panel className="px-6 py-5">
-          <h3 className="text-base text-ink">Before you turn this on</h3>
-          <ul className="mt-3 flex flex-col gap-2.5">
-            {CONSENT.map((line, i) => (
-              <li key={i} className="flex gap-2.5 text-sm text-muted">
-                <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-faint" />
-                <span className="text-pretty">{line}</span>
-              </li>
-            ))}
-          </ul>
-          <label className="mt-4 flex cursor-pointer items-start gap-2.5 text-sm text-ink">
-            <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 h-4 w-4 accent-white" />
-            <span>I understand my Riot session cookies will be stored on the server, encrypted, for up to ~30 days.</span>
-          </label>
-          <div className="mt-4 flex gap-2">
-            <Btn tone="primary" size="sm" disabled={!agree || busy} onClick={connect}>
-              {busy ? 'Connecting…' : 'Turn on and get my code'}
-            </Btn>
-            <Btn size="sm" tone="ghost" onClick={() => (setStage('idle'), setAgree(false))}>
-              Cancel
-            </Btn>
-          </div>
-        </Panel>
-      )}
-
-      {st?.linked && (
-        <div className="flex flex-col gap-3">
-          {codeLive && (
-            <Panel className="px-6 py-5">
-              <p className="text-sm text-muted">
-                Open <button onClick={() => copy(st.url, 'Link')} className="text-ink underline decoration-white/30 underline-offset-2">{st.url.replace(/^https?:\/\//, '')}</button> on your phone and enter this code once:
-              </p>
-              <button
-                onClick={() => copy(st.code!, 'Code')}
-                className="press mt-3 w-full rounded-2xl bg-white/[0.06] py-5 text-center ring-1 ring-inset ring-white/10 hover:bg-white/[0.09]"
-                title="Copy code"
-              >
-                <span className="t-num text-[34px] tracking-[0.28em] text-ink">{st.code}</span>
-              </button>
-              <p className="mt-2.5 text-xs text-faint">Expires in {codeMins} min. One use. After you’ve linked your phone, you don’t need it again.</p>
-            </Panel>
-          )}
-          <Panel className="divide-y divide-white/[0.06] px-6">
-            <div className="flex items-center justify-between gap-6 py-3.5">
-              <div className="min-w-0">
-                <div className="text-sm text-ink">{st.label ?? 'Linked account'}</div>
-                <div className="mt-0.5 text-xs text-muted">
-                  {st.lastKeyAt ? `Session key sent ${ago(st.lastKeyAt)}` : 'Session key not sent yet'}
-                  {st.keyValidUntil ? ` · valid until ${st.keyValidUntil}` : ''}
-                </div>
-              </div>
-              <Btn
-                size="sm"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  const r = await act<ValWebStatus>('val:syncNow');
-                  setBusy(false);
-                  if (r.ok) setSt(r.data);
-                  else showToast(r.error, 'error');
-                }}
-              >
-                Sync now
+        {consenting && !linked && (
+          <div className="py-5">
+            <ul className="flex flex-col gap-2.5">
+              {CONSENT.map((line, i) => (
+                <li key={i} className="flex gap-3 text-sm text-muted">
+                  <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-faint" />
+                  <span className="text-pretty">{line}</span>
+                </li>
+              ))}
+            </ul>
+            <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm text-ink">
+              <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-white" />
+              <span className="text-pretty">I understand my Riot sign-in cookies are stored on the server, encrypted, for up to about 30 days.</span>
+            </label>
+            <div className="mt-5">
+              <Btn tone="primary" disabled={!agree || busy} onClick={() => void connect()}>
+                {busy ? 'Turning on…' : 'Turn on and get my code'}
               </Btn>
             </div>
-            <div className="flex items-center justify-between gap-6 py-3.5">
-              <div className="text-sm text-muted">{st.lastSnapshotAt ? `Store uploaded ${ago(st.lastSnapshotAt)}` : 'Store not uploaded yet'}</div>
+          </div>
+        )}
+
+        {linked && codeLive && (
+          <div className="py-5">
+            <p className="text-sm text-muted">
+              On your phone, open{' '}
+              <button onClick={() => copy(st!.url, 'Link')} className="text-ink underline decoration-white/30 underline-offset-[3px]">
+                {st!.url.replace(/^https?:\/\//, '')}
+              </button>{' '}
+              and type this code once:
+            </p>
+            <button onClick={() => copy(st!.code!, 'Code')} className="press mt-3 w-full rounded-2xl bg-white/[0.06] py-4 text-center hover:bg-white/[0.09]" title="Copy code">
+              <span className="t-num text-[30px] tracking-[0.08em] text-ink">{st!.code}</span>
+            </button>
+            <p className="mt-2 text-xs text-faint">Works for {codeMins} more min, once.</p>
+          </div>
+        )}
+
+        {linked && (
+          <div className="flex items-center justify-between gap-6 py-3.5">
+            <div className="min-w-0">
+              <div className="truncate text-base text-ink">{st!.label ?? 'Linked account'}</div>
+              <div className="mt-0.5 text-sm text-muted">{st!.lastSnapshotAt ? `Store sent ${ago(st!.lastSnapshotAt)}` : 'Store not sent yet'}</div>
+            </div>
+            <div className="flex shrink-0 gap-2">
               {!codeLive && (
-                <Btn
-                  size="sm"
-                  tone="ghost"
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    const r = await act<ValWebStatus>('val:connect', true);
-                    setBusy(false);
-                    if (r.ok) setSt(r.data);
-                    else showToast(r.error, 'error');
-                  }}
-                >
+                <Btn size="sm" tone="ghost" disabled={busy} onClick={() => void run('val:connect', true)}>
                   New phone code
                 </Btn>
               )}
+              <Btn size="sm" disabled={busy} onClick={() => void run('val:syncNow')}>
+                Sync now
+              </Btn>
             </div>
-          </Panel>
-          {st.lastError && <ErrorNote>{st.lastError}</ErrorNote>}
-          <div className="px-1">
-            <Btn size="sm" tone="danger" disabled={busy} onClick={disconnect}>
-              Disconnect /val
-            </Btn>
           </div>
-        </div>
-      )}
+        )}
+        {linked && st!.lastError && (
+          <div className="py-4">
+            <ErrorNote>{st!.lastError}</ErrorNote>
+          </div>
+        )}
+      </Panel>
     </section>
   );
 }

@@ -153,7 +153,7 @@ function Library() {
             aria-selected={a.name === agent}
             title={a.name}
             onClick={() => setAgent(a.name)}
-            className={cx('press flex w-[60px] shrink-0 flex-col items-center gap-1 rounded-2xl px-1 py-1.5 text-[11px] font-medium', a.name === agent ? 'bg-white/[0.14] text-ink' : 'text-muted hover:bg-white/[0.06] hover:text-ink')}
+            className={cx('press flex w-[60px] shrink-0 flex-col items-center gap-1 rounded-2xl px-1 py-1.5 text-[11px] font-medium leading-tight', a.name === agent ? 'bg-white/[0.14] text-ink' : 'text-muted hover:bg-white/[0.06] hover:text-ink')}
           >
             <Img src={img(a.icon)} alt="" className={cx('h-10 w-10 rounded-xl', a.name !== agent && 'opacity-70')} />
             <span className="w-full truncate text-center">{a.name}</span>

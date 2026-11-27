@@ -133,7 +133,7 @@ export function PartyScreen({ connected, valorant }: { connected: boolean; valor
               </div>
               <div className="label mt-5">Party code</div>
               <div className="mt-2 flex items-center gap-2">
-                <span className="num flex-1 rounded-sm border border-line bg-black/20 px-3 py-1.5 font-display text-md font-bold tracking-[0.2em]">{p.inviteCode ?? '——'}</span>
+                <span className="num flex-1 rounded-sm border border-line bg-black/20 px-3 py-1.5 font-display text-md font-bold tracking-[0.08em]">{p.inviteCode ?? '——'}</span>
                 {p.inviteCode ? (
                   <Btn onClick={() => void run('code-disable')} disabled={!!busy}>Disable</Btn>
                 ) : (

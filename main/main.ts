@@ -623,7 +623,8 @@ async function startServices(): Promise<void> {
       pinned: getSettings().accountMode === 'pinned' && session.tokenSource === 'signin',
       vault: vault ? { ...vault.quickHealth(), now: Date.now() } : undefined,
       store: shop ? { status: shop.view.status, cached: shop.view.cached, fetchedAt: shop.view.fetchedAt, error: shop.view.error, blocked: shop.view.status === 'error' && netRouter.status.lastBlocked === true } : undefined,
-      proxy: getSettings().netMode !== 'direct' ? { mode: getSettings().netMode as 'fallback' | 'proxy', state: netRouter.status.proxyState, error: netRouter.status.proxyError } : undefined,
+      // No proxy entered = requests go direct (NetRouter), so there is no proxy state to warn about.
+      proxy: getSettings().netMode !== 'direct' && getSettings().proxyUrl.trim() ? { mode: getSettings().netMode as 'fallback' | 'proxy', state: netRouter.status.proxyState, error: netRouter.status.proxyError } : undefined,
     });
   };
   pushHealth = () => {
