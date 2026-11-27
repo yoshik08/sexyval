@@ -19,6 +19,8 @@ export interface SkinContext {
   basePrice?: number;
   discountPercent?: number;
   source?: string;
+  /** Level to show first (e.g. the one equipped in the loadout). */
+  startLevel?: number;
 }
 
 let openState: { skinId: string; ctx?: SkinContext } | null = null;
@@ -118,7 +120,8 @@ function Body({ skin, ctx }: { skin: CatalogSkin; ctx?: SkinContext }) {
 
   // Start on the first thing that has a video; fall back to the base level's still.
   const firstVideo = skin.levels.findIndex((l) => l.video);
-  const [sel, setSel] = useState<Sel>({ kind: 'level', index: Math.max(0, firstVideo) });
+  const start = ctx?.startLevel != null && skin.levels[ctx.startLevel] ? ctx.startLevel : Math.max(0, firstVideo);
+  const [sel, setSel] = useState<Sel>({ kind: 'level', index: start });
   const [sequence, setSequence] = useState(false);
   const level = skin.levels[sel.kind === 'level' ? sel.index : 0];
   const chroma = sel.kind === 'chroma' ? skin.chromas[sel.index] : undefined;

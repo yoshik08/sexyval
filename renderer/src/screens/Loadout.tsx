@@ -21,6 +21,27 @@ const GROUPS: [string, string][] = [
 
 const levelLabel = (item: string | undefined, i: number) => (i === 0 ? 'Base' : (item ?? `Level ${i + 1}`).replace(/([a-z])([A-Z])/g, '$1 $2'));
 
+/** Equipped level index (0 when the level id is unknown). */
+const levelIndex = (s: CatalogSkin, levelId: string | undefined) => Math.max(0, s.levels.findIndex((l) => l.id === levelId));
+const isTopLevel = (s: CatalogSkin, li: number) => li >= s.levels.length - 1;
+
+/**
+ * What the gun looks like at the level it is on. Variants only exist at the top level (as in game),
+ * and a chroma render is always the fully upgraded look, so below the top level we use that level's
+ * own art, falling back to the nearest lower level that has some.
+ */
+function gunArt(w: CatalogWeapon, s: CatalogSkin | undefined, g: LoadoutGun | undefined): string | undefined {
+  if (!s) return w.defaultSkin?.icon ?? w.icon;
+  const li = levelIndex(s, g?.skinLevelId);
+  const ci = s.chromas.findIndex((c) => c.id === g?.chromaId);
+  if (ci > 0 && isTopLevel(s, li)) {
+    const c = s.chromas[ci];
+    return c.render ?? c.icon ?? s.icon;
+  }
+  for (let i = li; i >= 0; i--) if (s.levels[i]?.icon) return s.levels[i].icon;
+  return s.icon ?? s.chromas[0]?.render;
+}
+
 function gunChanged(a: LoadoutGun | undefined, b: LoadoutGun | undefined): boolean {
   if (!a || !b) return false;
   return a.skinId !== b.skinId || a.skinLevelId !== b.skinLevelId || a.chromaId !== b.chromaId || (a.charmInstanceId ?? '') !== (b.charmInstanceId ?? '');
@@ -150,11 +171,21 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
     : [];
   const ownedBuddies = catalog.buddies.filter((b) => b.levelId && owned.buddyInstances[b.levelId]?.length);
 
-  const art = (w: CatalogWeapon, g?: LoadoutGun) => {
-    const s = g ? skinById.get(g.skinId) : undefined;
-    const chroma = s?.chromas.find((c) => c.id === g?.chromaId);
-    return chroma?.render ?? s?.icon ?? w.defaultSkin?.icon ?? w.icon;
+  const art = (w: CatalogWeapon, g?: LoadoutGun) => gunArt(w, g ? skinById.get(g.skinId) : undefined, g);
+
+  /** Below the top level only the base variant exists, so dropping a level resets the variant. */
+  const pickLevel = (wid: string, skin: CatalogSkin, li: number) => {
+    const patch: Partial<LoadoutGun> = { skinLevelId: skin.levels[li].id };
+    if (!isTopLevel(skin, li) && skin.chromas[0]) patch.chromaId = skin.chromas[0].id;
+    setGun(wid, patch);
   };
+  /** A variant needs the top level, so picking one upgrades the gun to it. */
+  const pickChroma = (wid: string, skin: CatalogSkin, ci: number) => {
+    const patch: Partial<LoadoutGun> = { chromaId: skin.chromas[ci].id };
+    if (ci > 0 && skin.levels.length) patch.skinLevelId = skin.levels[skin.levels.length - 1].id;
+    setGun(wid, patch);
+  };
+  const selLevel = selSkin ? levelIndex(selSkin, gun?.skinLevelId) : 0;
 
   return (
     <div className="mx-auto max-w-[1280px] px-6 xl:px-10 pb-32 pt-6">
@@ -290,7 +321,7 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
                         <p className="mt-0.5 text-sm text-muted">{selSkin ? weapon.name : 'Standard skin'}</p>
                       </div>
                       {selSkin && (
-                        <Btn size="sm" onClick={() => openSkin(selSkin.id)}>
+                        <Btn size="sm" onClick={() => openSkin(selSkin.id, { startLevel: selLevel })}>
                           <Play size={11} weight="fill" /> Watch
                         </Btn>
                       )}
@@ -322,7 +353,7 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
                                 <button
                                   key={l.id}
                                   disabled={!can}
-                                  onClick={() => setGun(weapon.id, { skinLevelId: l.id })}
+                                  onClick={() => pickLevel(weapon.id, selSkin, i)}
                                   title={can ? levelLabel(l.item, i) : `${levelLabel(l.item, i)} (not owned)`}
                                   className={cx('press h-9 rounded-full px-3.5 text-sm font-medium disabled:opacity-30', on ? 'bg-white text-black' : 'bg-white/[0.1] text-ink hover:bg-white/[0.16]')}
                                 >
@@ -331,20 +362,24 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
                               );
                             })}
                           </div>
-                          <p className="mt-1.5 text-xs text-faint">{levelLabel(selSkin.levels.find((l) => l.id === gun.skinLevelId)?.item, Math.max(0, selSkin.levels.findIndex((l) => l.id === gun.skinLevelId)))}</p>
+                          <p className="mt-1.5 text-xs text-faint">
+                            Level {selLevel + 1} of {selSkin.levels.length} · {levelLabel(selSkin.levels[selLevel]?.item, selLevel)}
+                            {selSkin.chromas.length > 1 && !isTopLevel(selSkin, selLevel) && ` · Variants need level ${selSkin.levels.length}`}
+                          </p>
                         </div>
                         {selSkin.chromas.length > 1 && (
                           <div>
                             <div className="mb-2 text-sm text-muted">Variant</div>
                             <div className="flex flex-wrap gap-2.5">
                               {selSkin.chromas.map((c, i) => {
-                                const can = sets ? chromaOwned(selSkin, i, sets) : false;
-                                const on = gun.chromaId === c.id;
+                                // A variant forces the top level, so it is only offered when you own that too.
+                                const can = sets ? chromaOwned(selSkin, i, sets) && (i === 0 || levelOwned(selSkin, selSkin.levels.length - 1, sets)) : false;
+                                const on = gun.chromaId === c.id && (i === 0 || isTopLevel(selSkin, selLevel));
                                 return (
                                   <button
                                     key={c.id}
                                     disabled={!can}
-                                    onClick={() => setGun(weapon.id, { chromaId: c.id })}
+                                    onClick={() => pickChroma(weapon.id, selSkin, i)}
                                     title={can ? c.name : `${c.name} (not owned)`}
                                     className={cx('press h-12 w-12 overflow-hidden rounded-2xl bg-white/[0.06] disabled:opacity-30', on ? 'ring-2 ring-white' : 'ring-1 ring-white/10 hover:ring-white/30')}
                                   >
