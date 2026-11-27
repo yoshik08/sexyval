@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer, useState } from 'react';
 import type { CatalogSkin, CatalogWeapon, LoadoutGun, LoadoutPreset, LoadoutView } from '../../../shared/features';
 import { chromaOwned, isSkinOwned, levelOwned, tierRank } from '../../../shared/collection';
 import { cx } from '../lib/format';
@@ -26,9 +26,41 @@ const levelIndex = (s: CatalogSkin, levelId: string | undefined) => Math.max(0, 
 const isTopLevel = (s: CatalogSkin, li: number) => li >= s.levels.length - 1;
 
 /**
+ * Some skins (Prime, Oni, Sovereign...) use a still of the level's effect as its icon instead of the gun.
+ * Those are always exactly these sizes; every gun render is sized otherwise (checked against all 513
+ * upgraded-level icons on valorant-api.com). Size is readable cross-origin, pixels are not.
+ */
+const EFFECT_STILL = new Set(['540x240', '240x240']);
+/** icon url -> true (gun render), false (effect still / broken), null (being measured). */
+const levelArtOk = new Map<string, boolean | null>();
+const levelArtSubs = new Set<() => void>();
+function isGunRender(url: string): boolean | null {
+  const known = levelArtOk.get(url);
+  if (known !== undefined) return known;
+  levelArtOk.set(url, null);
+  const probe = new Image();
+  const done = (ok: boolean) => {
+    levelArtOk.set(url, ok);
+    levelArtSubs.forEach((f) => f());
+  };
+  probe.onload = () => done(!EFFECT_STILL.has(`${probe.naturalWidth}x${probe.naturalHeight}`));
+  probe.onerror = () => done(false);
+  probe.src = img(url) ?? '';
+  return null;
+}
+/** Re-renders once a level icon has been measured. */
+function useLevelArt(): void {
+  const [, bump] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    levelArtSubs.add(bump);
+    return () => void levelArtSubs.delete(bump);
+  }, []);
+}
+
+/**
  * What the gun looks like at the level it is on. Variants only exist at the top level (as in game),
  * and a chroma render is always the fully upgraded look, so below the top level we use that level's
- * own art, falling back to the nearest lower level that has some.
+ * own art, falling back to the nearest lower level that has a real gun render, then the base look.
  */
 function gunArt(w: CatalogWeapon, s: CatalogSkin | undefined, g: LoadoutGun | undefined): string | undefined {
   if (!s) return w.defaultSkin?.icon ?? w.icon;
@@ -38,8 +70,11 @@ function gunArt(w: CatalogWeapon, s: CatalogSkin | undefined, g: LoadoutGun | un
     const c = s.chromas[ci];
     return c.render ?? c.icon ?? s.icon;
   }
-  for (let i = li; i >= 0; i--) if (s.levels[i]?.icon) return s.levels[i].icon;
-  return s.icon ?? s.chromas[0]?.render;
+  for (let i = li; i > 0; i--) {
+    const icon = s.levels[i]?.icon;
+    if (icon && isGunRender(icon) === true) return icon;
+  }
+  return s.levels[0]?.icon ?? s.icon ?? s.chromas[0]?.render;
 }
 
 function gunChanged(a: LoadoutGun | undefined, b: LoadoutGun | undefined): boolean {
@@ -61,6 +96,7 @@ function changeCount(draft: LoadoutView | null, server: LoadoutView | null): num
 export function LoadoutScreen({ connected }: { connected: boolean }) {
   const catalog = useCatalog();
   const owned = useOwned();
+  useLevelArt();
   const { data: server, setData: setServer, error, loading, reload } = useRpc<LoadoutView>('loadout:get', [], connected);
   const presets = useRpc<LoadoutPreset[]>('loadout:presets', []);
   const [draft, setDraft] = useState<LoadoutView | null>(null);
