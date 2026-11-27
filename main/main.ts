@@ -30,6 +30,7 @@ import { SquadService } from './services/squad';
 import { LifetimeService } from './services/lifetime';
 import { StoreArchive } from './services/bundles';
 import { StoreSync } from './services/storeSync';
+import { ValWebSync } from './services/valWebSync';
 import { PriceScrapeService } from './services/priceScrape';
 import { createSystemServices, uninstallCleanup, type SystemServices } from './services/gameSystem';
 import os from 'node:os';
@@ -75,6 +76,7 @@ let tray: Tray | null = null;
 let quitting = false;
 let loop: GameLoop | null = null;
 let shop: ShopService | null = null;
+let valWebSync: ValWebSync | null = null;
 const overlay = new AgentSelectOverlay(getSettings);
 let mock: MockHandle | null = null;
 let accounts: AccountManager | null = null;
@@ -446,6 +448,7 @@ async function startServices(): Promise<void> {
       onWishlistHit: (hits) => notify('Wishlist skin in your store', hits.map((h) => `${h.name}${h.kind === 'night' ? ' (Night Market)' : h.kind === 'bundle' ? ' (bundle)' : ''}`).join(', ')),
       onLoaded: (v) => {
         prices.record(v);
+        if (v.puuid) valWebSync?.onShop(v, v.puuid);
       },
       onRaw: (sf, puuid) => storeSync?.ingestActive(sf, puuid),
       afterRefresh: (walletChanged) => {
@@ -472,6 +475,17 @@ async function startServices(): Promise<void> {
     onWishlistHit: (hits, _puuid, label) => notify(`Wishlist skin in ${label}’s store`, hits.map((h) => h.name).join(', ')),
     deferred: () => quiet,
   });
+  valWebSync = new ValWebSync({
+    file: dataDir('val-web.json'),
+    setEnabled: (on) => updateSettings({ valWebSync: on }),
+    isEnabled: () => getSettings().valWebSync,
+    activeSignIn: () => accounts!.activeSignIn(),
+    signInByPuuid: (p) => accounts!.signInByPuuid(p),
+    ssoCookies: (id) => accounts!.ssoCookies(id),
+    currentShop: () => shop?.view ?? null,
+    onChange: () => send('val', valWebSync?.status()),
+  });
+  await valWebSync.load();
   const progression = new ProgressionService(api, catalog, assets);
   const party = new PartyService(api, assets, catalog, names);
   const loadout = new LoadoutService(api, dataDir('loadout-presets.json'), () => void owned.refresh());
@@ -586,6 +600,7 @@ async function startServices(): Promise<void> {
       ingestSoon('account');
       masterySoon('account');
       void storeSync?.syncOthers('tokens');
+      valWebSync?.onAccountActive(puuid);
     },
     onNoTokens: () => {
       if (owned.state.status !== 'signed-out') owned.signedOut();
@@ -729,6 +744,14 @@ async function startServices(): Promise<void> {
       await storeSync?.syncOthers('manual');
       return true;
     },
+    // ---- yoshik.xyz/val web store sync ----
+    'val:status': () => valWebSync?.status() ?? null,
+    'val:connect': (consented: unknown) => {
+      if (!valWebSync) throw new Error('not ready');
+      return valWebSync.connect(consented === true);
+    },
+    'val:disconnect': () => valWebSync?.disconnect() ?? null,
+    'val:syncNow': () => valWebSync?.pushNow() ?? null,
     // ---- Agent Mastery. The renderer names the account it shows: a mismatch means it switched. ----
     'mastery:get': (puuid: unknown) => {
       const p = session.puuid;
@@ -783,7 +806,15 @@ async function startServices(): Promise<void> {
       accounts?.switchTo(str(id, 32));
       loop?.pollNow();
     },
-    'accounts:remove': (id: unknown) => accounts?.remove(str(id, 32)).then(() => loop?.pollNow()),
+    'accounts:remove': async (id: unknown) => {
+      const key = str(id, 32);
+      const puuid = accounts?.list().find((a) => a.id === key)?.puuid;
+      await accounts?.remove(key);
+      // Removing the account /val is linked to also deletes its key from the Worker (best effort: on failure
+      // the link stays, with the error shown in Settings > Network, so it can be disconnected there).
+      if (puuid && valWebSync?.status().puuid === puuid) await valWebSync.disconnect().catch((e) => log.warn('val: disconnect after account removal failed', e));
+      void loop?.pollNow();
+    },
     'accounts:signInAgain': (id: unknown) =>
       accounts?.signInAgain(str(id, 32)).then((ok) => {
         loop?.pollNow();
@@ -1011,7 +1042,11 @@ function registerIpc(): void {
   handle('shop:refresh', () => shop?.refresh());
   // The renderer never sees the HenrikDev key, only that one is set.
   handle('settings:get', () => publicSettings());
-  handle('settings:set', (patch: Partial<Settings>) => publicSettings(updateSettings(patch ?? {})));
+  // valWebSync is flipped only by val:connect (consent-gated) / val:disconnect, never by a generic settings write.
+  handle('settings:set', (patch: Partial<Settings>) => {
+    const { valWebSync: _ignored, ...rest } = patch ?? {};
+    return publicSettings(updateSettings(rest));
+  });
   handle('debug:get', () => debug.dump());
   handle('mock:is', () => MOCK);
   handle('mock:phase', (p: Phase | 'auto' | 'offline' | 'noval') => {

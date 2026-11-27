@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs, constants as fsc } from 'node:fs';
@@ -94,8 +94,12 @@ describe('StretchService: Valorant ini', () => {
     expect(t.calls.find((c) => c[0] === 'apply')).toEqual(['apply', '\\\\.\\DISPLAY1', '1440', '1080', '240']);
     expect(await fs.readFile(t.files[0], 'utf8')).toBe(ORIGINAL);
     await t.setGame(false);
-    expect(t.calls.find((c) => c[0] === 'restore')).toEqual(['restore', '\\\\.\\DISPLAY1', '1920', '1080', '240', '0']);
-    expect(readIniKeys(await fs.readFile(t.files[0], 'utf8'), SECTION).ResolutionSizeX).toBe('1440');
+    // The game-closed handler restores the display and then writes the ini asynchronously: wait for the
+    // outcome instead of a fixed delay (a fixed 30 ms flaked under a loaded full-suite run).
+    await vi.waitFor(async () => {
+      expect(t.calls.find((c) => c[0] === 'restore')).toEqual(['restore', '\\\\.\\DISPLAY1', '1920', '1080', '240', '0']);
+      expect(readIniKeys(await fs.readFile(t.files[0], 'utf8'), SECTION).ResolutionSizeX).toBe('1440');
+    }, { timeout: 2000, interval: 20 });
     await t.set({ stretchEnabled: false });
   });
 });

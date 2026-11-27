@@ -37,6 +37,7 @@ const DEFAULTS: Settings = {
   netMode: 'direct',
   proxyUrl: '',
   perfMode: 'auto',
+  valWebSync: false,
 };
 
 /** Shown instead of the key: the renderer only learns that one is set (and its last 4 characters). */
@@ -132,6 +133,8 @@ export function updateSettings(patch: Partial<Settings>): Settings {
   // Shape only; parseProxy (shared/netRoute.ts) enforces loopback when the route is used and in Settings.
   if (typeof patch.proxyUrl === 'string' && patch.proxyUrl.length <= 200 && /^[!-~]*$/.test(patch.proxyUrl.trim())) next.proxyUrl = patch.proxyUrl.trim();
   if (patch.perfMode === 'auto' || patch.perfMode === 'always' || patch.perfMode === 'normal') next.perfMode = patch.perfMode;
+  // Persistable, but the renderer flips it only through val:connect (consent-gated) / val:disconnect; see valWebSync.ts.
+  if (typeof patch.valWebSync === 'boolean') next.valWebSync = patch.valWebSync;
   if (typeof patch.henrikKey === 'string' && patch.henrikKey.length <= 200 && !patch.henrikKey.startsWith(KEY_MASK)) next.henrikKey = patch.henrikKey.trim();
   if (next.launchAtStartup !== current.launchAtStartup && app.isPackaged) {
     app.setLoginItemSettings({ openAtLogin: next.launchAtStartup, args: ['--hidden'] }); // started by Windows: begin in the tray

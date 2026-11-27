@@ -124,7 +124,9 @@ export class ElevatedRunner {
     const xmlFile = path.join(this.dir, 'task.xml');
     await fs.writeFile(xmlFile, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]));
     // Start-Process -Verb RunAs is the UAC prompt; -Wait so we know when it's done.
-    const ps = `Start-Process -FilePath '${sys32('schtasks.exe')}' -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList @('/Create','/TN','${TASK_NAME}','/XML','"${xmlFile}"','/F')`;
+    // Single-quoted PowerShell strings: double any ' so a profile path with an apostrophe (O'Brien) still works.
+    const q = (s: string) => s.replace(/'/g, "''");
+    const ps = `Start-Process -FilePath '${q(sys32('schtasks.exe'))}' -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList @('/Create','/TN','${q(TASK_NAME)}','/XML','"${q(xmlFile)}"','/F')`;
     await exec(sys32('WindowsPowerShell\\v1.0\\powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', ps], 120_000);
     await fs.rm(xmlFile, { force: true });
     return this.ready();

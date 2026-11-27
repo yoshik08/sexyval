@@ -27,7 +27,7 @@ export const VAULT_FILES = [
 ] as const;
 export type VaultFile = (typeof VAULT_FILES)[number];
 /** Never carried in settings: secrets and machine-specific values. */
-export const SKIP_SETTINGS = ['henrikKey', 'window', 'stretchDevice', 'overlayDisplay'] as const;
+export const SKIP_SETTINGS = ['henrikKey', 'window', 'stretchDevice', 'overlayDisplay', 'valWebSync'] as const;
 
 export const ID_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/i;
 export const MATCH_FILE = /^[0-9a-zA-Z-]{20,64}\.v2\.json$/;

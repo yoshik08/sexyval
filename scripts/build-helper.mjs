@@ -3,8 +3,10 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..');
+// fileURLToPath, not a regex on the URL: the drive letter is lower-case (c:) when started from VS Code.
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const src = path.join(root, 'helper', 'stretch.cs');
 const out = path.join(root, 'helper', 'stretch.exe');
 const windir = process.env.WINDIR ?? 'C:\\Windows';

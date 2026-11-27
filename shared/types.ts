@@ -270,6 +270,13 @@ export interface Settings {
   proxyUrl: string;
   /** Lightweight background mode (Settings > Performance). auto = while Valorant runs. */
   perfMode: 'auto' | 'always' | 'normal';
+  /**
+   * yoshik.xyz/val web store sync (Settings > Network). Off by default. When on, after each silent
+   * re-auth SexyVal hands the Worker a fresh Riot SSO cookie set + the parsed store, so the web page
+   * shows this account's store on days the app is closed. Turning it off disconnects and deletes the
+   * server copy. The toggle can only be turned on from the consent screen (main/services/valWebSync.ts).
+   */
+  valWebSync: boolean;
 }
 
 export interface StretchStatus {

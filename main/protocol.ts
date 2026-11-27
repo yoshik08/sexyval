@@ -51,7 +51,8 @@ export function handleApp(rendererDir: string): void {
     const url = new URL(req.url);
     const rel = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);
     const file = path.normalize(path.join(rendererDir, rel));
-    if (!file.startsWith(path.normalize(rendererDir))) return new Response('forbidden', { status: 403 });
+    // Separator included: a bare prefix check would also admit a sibling folder like "renderer-old".
+    if (!file.startsWith(path.normalize(rendererDir) + path.sep)) return new Response('forbidden', { status: 403 });
     try {
       const data = await fs.readFile(file);
       return new Response(data, {

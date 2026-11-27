@@ -5,6 +5,7 @@ import type { AccountInfo } from '../../shared/features';
 import { httpRequest } from '../riot/http';
 import type { SignInProvider } from '../riot/session';
 import { readJsonStrict, writeJsonWithBackup } from '../paths';
+import { isUploadableCookie, type ValCookie } from '../../shared/valWeb';
 import { log } from '../log';
 
 interface StoredAccount {
@@ -355,6 +356,38 @@ export class AccountManager implements SignInProvider {
     return this.accounts
       .filter((a) => a.puuid && a.region)
       .map((a) => ({ id: a.id, puuid: a.puuid!, region: a.region!, label: `${a.name ?? '?'}#${a.tag ?? '?'}`, status: this.status.get(a.id) ?? 'pending' }));
+  }
+
+  /**
+   * The Riot SSO cookies in an account's partition, filtered to the uploadable set (ssid and the few
+   * around it). Used only by the /val web-sync hand-off, which the user turns on explicitly. These
+   * cookies are the login session itself, so this is the one place SexyVal ever reads them out of the
+   * partition; nothing else copies them, and they are never written to disk here.
+   */
+  async ssoCookies(id: string): Promise<ValCookie[]> {
+    const all = await electronSession
+      .fromPartition(this.partition(id))
+      .cookies.get({ domain: 'riotgames.com' })
+      .catch(() => [] as Electron.Cookie[]);
+    return all
+      .filter((c) => isUploadableCookie({ name: c.name, domain: c.domain ?? '' }))
+      .map((c) => ({ name: c.name, value: c.value, domain: c.domain ?? '', path: c.path ?? '/', secure: c.secure ?? true, httpOnly: c.httpOnly ?? false, expirationDate: c.expirationDate }));
+  }
+
+  /** The active account as a /val link target, but only when it is a saved sign-in (has a partition with SSO cookies). */
+  activeSignIn(): { id: string; puuid: string; region: string; label: string } | null {
+    const id = this.activeId;
+    if (!id) return null;
+    const a = this.accounts.find((x) => x.id === id);
+    if (!a?.puuid || !a.region) return null;
+    return { id, puuid: a.puuid, region: a.region, label: `${a.name ?? '?'}#${a.tag ?? '?'}` };
+  }
+
+  /** A signed-in account by puuid (so the service can re-read cookies for the linked account on every open). */
+  signInByPuuid(puuid: string): { id: string; puuid: string; region: string; label: string } | null {
+    const a = this.accounts.find((x) => x.puuid === puuid);
+    if (!a?.puuid || !a.region) return null;
+    return { id: a.id, puuid: a.puuid, region: a.region, label: `${a.name ?? '?'}#${a.tag ?? '?'}` };
   }
 
   /** Tokens for a specific account (store sync), re-authenticating silently when needed. Null if expired. */

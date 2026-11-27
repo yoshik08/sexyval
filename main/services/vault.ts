@@ -152,7 +152,7 @@ export class VaultService {
     }
     // Settings: never the HenrikDev key or machine-specific values.
     const s = files['settings.json'] as Record<string, unknown> | undefined;
-    if (s) for (const k of ['henrikKey', 'window', 'stretchDevice', 'overlayDisplay']) delete s[k];
+    if (s) for (const k of ['henrikKey', 'window', 'stretchDevice', 'overlayDisplay', 'valWebSync']) delete s[k];
     return payload;
   }
 
@@ -299,7 +299,7 @@ export class VaultService {
       // The vault never carries secrets or machine values: keep this PC's (HenrikDev key, window, displays).
       if (f === 'settings.json' && v && typeof v === 'object') {
         const here = await fs.readFile(this.dataDir(f), 'utf8').then((t) => JSON.parse(t), () => ({}));
-        v = { ...(v as object), ...Object.fromEntries(['henrikKey', 'window', 'stretchDevice', 'overlayDisplay'].filter((k) => k in here).map((k) => [k, here[k]])) };
+        v = { ...(v as object), ...Object.fromEntries(['henrikKey', 'window', 'stretchDevice', 'overlayDisplay', 'valWebSync'].filter((k) => k in here).map((k) => [k, here[k]])) };
       }
       await fs.writeFile(this.dataDir(f), JSON.stringify(v));
       n++;

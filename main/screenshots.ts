@@ -102,8 +102,8 @@ const STEPS: Step[] = [
 /** Drives the mock scenario through every screen and saves PNGs. Dev only. */
 export async function runScreenshots(win: BrowserWindow, mock: MockHandle, pollNow: () => void, dir: string, overlay?: () => WebContents | null): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) log.warn(`renderer: ${message}`);
+  win.webContents.on('console-message', (e) => {
+    if (e.level === 'warning' || e.level === 'error') log.warn(`renderer: ${e.message}`);
   });
   win.webContents.on('render-process-gone', (_e, d) => log.error(`renderer gone: ${d.reason}`));
   win.webContents.on('did-start-navigation', (_e, url) => log.warn(`page navigation: ${url.slice(0, 70)}`));
@@ -159,8 +159,8 @@ const LIVE_STEPS: Step[] = [
 /** Dev only: captures the real screens against the real Riot Client (no mock). Output stays on this machine. */
 export async function runLiveShots(win: BrowserWindow, dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) log.warn(`renderer: ${message}`);
+  win.webContents.on('console-message', (e) => {
+    if (e.level === 'warning' || e.level === 'error') log.warn(`renderer: ${e.message}`);
   });
   win.webContents.on('render-process-gone', (_e, d) => log.error(`renderer gone: ${d.reason}`));
   win.webContents.on('did-start-navigation', (_e, url) => log.info(`navigation: ${url.slice(0, 60)}`));

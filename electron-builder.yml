@@ -17,6 +17,10 @@ files:
   - build/icons/*.png
   - package.json
 asar: true
+# The UI is English only: ship Chromium's en-US strings, not all ~55 locale packs (about 45 MB).
+# Number/currency formatting (Intl, en-IN ₹) comes from ICU (icudtl.dat), which is unaffected.
+electronLanguages:
+  - en-US
 win:
   icon: build/icon.png
   target:
