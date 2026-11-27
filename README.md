@@ -6,8 +6,8 @@ Personal, unofficial Valorant companion for Windows, in a normal desktop window,
 
 ## Install
 
-- `release/SexyVal-Setup-1.8.0.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
-- `release/SexyVal-Portable-1.8.0.exe` runs without installing.
+- `release/SexyVal-Setup-1.9.1.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
+- `release/SexyVal-Portable-1.9.1.exe` runs without installing.
 
 The builds are unsigned, so Windows SmartScreen will warn. Click "More info", then "Run anyway".
 
