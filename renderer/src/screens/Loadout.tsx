@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CatalogSkin, CatalogWeapon, LoadoutGun, LoadoutPreset, LoadoutView } from '../../../shared/features';
 import { chromaOwned, isSkinOwned, levelOwned, tierRank } from '../../../shared/collection';
+import { EFFECT_STILL, gunArt, isTopLevel, levelIndex, moveToLevel } from '../../../shared/loadoutArt';
 import { cx } from '../lib/format';
 import { img } from '../lib/media';
-import { ArrowClockwise, Check, FloppyDisk, Play, Trash } from '../lib/icons';
+import { ArrowClockwise, Check, FloppyDisk, Play, Trash, X } from '../lib/icons';
 import { ownedSets, setLoadoutDirty, useCatalog, useOwned } from '../lib/store';
 import { Img, Panel, Select, Skeleton, Toggle, tint } from '../components/ui';
 import { act, Btn, ErrorNote, Note, PageHeader, useRpc } from '../components/kit';
@@ -21,16 +22,6 @@ const GROUPS: [string, string][] = [
 
 const levelLabel = (item: string | undefined, i: number) => (i === 0 ? 'Base' : (item ?? `Level ${i + 1}`).replace(/([a-z])([A-Z])/g, '$1 $2'));
 
-/** Equipped level index (0 when the level id is unknown). */
-const levelIndex = (s: CatalogSkin, levelId: string | undefined) => Math.max(0, s.levels.findIndex((l) => l.id === levelId));
-const isTopLevel = (s: CatalogSkin, li: number) => li >= s.levels.length - 1;
-
-/**
- * Some skins (Prime, Oni, Sovereign...) use a still of the level's effect as its icon instead of the gun.
- * Those are always exactly these sizes; every gun render is sized otherwise (checked against all 513
- * upgraded-level icons on valorant-api.com). Size is readable cross-origin, pixels are not.
- */
-const EFFECT_STILL = new Set(['540x240', '240x240']);
 /** icon url -> true (gun render), false (effect still / broken), null (being measured). */
 const levelArtOk = new Map<string, boolean | null>();
 const levelArtSubs = new Set<() => void>();
@@ -57,24 +48,12 @@ function useLevelArt(): void {
   }, []);
 }
 
-/**
- * What the gun looks like at the level it is on. Variants only exist at the top level (as in game),
- * and a chroma render is always the fully upgraded look, so below the top level we use that level's
- * own art, falling back to the nearest lower level that has a real gun render, then the base look.
- */
-function gunArt(w: CatalogWeapon, s: CatalogSkin | undefined, g: LoadoutGun | undefined): string | undefined {
-  if (!s) return w.defaultSkin?.icon ?? w.icon;
-  const li = levelIndex(s, g?.skinLevelId);
-  const ci = s.chromas.findIndex((c) => c.id === g?.chromaId);
-  if (ci > 0 && isTopLevel(s, li)) {
-    const c = s.chromas[ci];
-    return c.render ?? c.icon ?? s.icon;
-  }
-  for (let i = li; i > 0; i--) {
-    const icon = s.levels[i]?.icon;
-    if (icon && isGunRender(icon) === true) return icon;
-  }
-  return s.levels[0]?.icon ?? s.icon ?? s.chromas[0]?.render;
+/** Esc closes the weapon panel only when nothing sits above it (sheet, palette, open dropdown) and you are not typing. */
+function escClosesPanel(e: KeyboardEvent): boolean {
+  if (e.key !== 'Escape' || e.defaultPrevented || e.repeat) return false;
+  const t = e.target as HTMLElement | null;
+  if (t?.closest('input, textarea, select, [contenteditable="true"]')) return false;
+  return !document.querySelector('[role="dialog"], [role="listbox"]');
 }
 
 function gunChanged(a: LoadoutGun | undefined, b: LoadoutGun | undefined): boolean {
@@ -104,6 +83,28 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [presetName, setPresetName] = useState('');
   const [busy, setBusy] = useState(false);
+  /** `${weaponId}:${skinId}` -> the variant a gun had before it left the top level, put back when it returns. */
+  const heldVariant = useRef(new Map<string, string>());
+
+  /** Back to "Choose a weapon"; focus returns to the weapon's tile so the keyboard keeps its place. */
+  const closePanel = () => {
+    const id = weaponId;
+    setWeaponId(null);
+    if (id) requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-weapon="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }));
+  };
+  const closeRef = useRef(closePanel);
+  closeRef.current = closePanel;
+  useEffect(() => {
+    if (!weaponId) return;
+    // Capture phase: runs before the sheet, palette and dropdown handlers, while they are still in the DOM.
+    const onKey = (e: KeyboardEvent) => {
+      if (!escClosesPanel(e)) return;
+      e.preventDefault();
+      closeRef.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [weaponId]);
 
   useEffect(() => {
     if (server?.status === 'ready') setDraft(server);
@@ -128,8 +129,16 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
   const gunOf = (wid: string) => draft?.guns.find((g) => g.weaponId === wid);
   const setGun = (wid: string, patch: Partial<LoadoutGun>) => setDraft((d) => (d ? { ...d, guns: d.guns.map((g) => (g.weaponId === wid ? { ...g, ...patch } : g)) } : d));
 
+  /** Remember the variant on the skin being left, so picking that skin again brings it back. */
+  const holdVariant = (wid: string) => {
+    const g = gunOf(wid);
+    const s = g ? skinById.get(g.skinId) : undefined;
+    if (g && s && s.chromas.findIndex((c) => c.id === g.chromaId) > 0) heldVariant.current.set(`${wid}:${s.id}`, g.chromaId);
+  };
+
   const pickSkin = (wid: string, skin: CatalogSkin | 'standard') => {
     const w = catalog.weapons.find((x) => x.id === wid);
+    holdVariant(wid);
     if (skin === 'standard') {
       if (w?.defaultSkin) setGun(wid, { skinId: w.defaultSkin.id, skinLevelId: w.defaultSkin.levelId, chromaId: w.defaultSkin.chromaId });
       return;
@@ -142,7 +151,9 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
         break;
       }
     }
-    setGun(wid, { skinId: skin.id, skinLevelId: skin.levels[li].id, chromaId: skin.chromas[0]?.id ?? '' });
+    // Landing on the top level puts back the variant this skin had on this weapon.
+    const { patch } = moveToLevel(skin, { chromaId: skin.chromas[0]?.id ?? '' }, li, heldVariant.current.get(`${wid}:${skin.id}`));
+    setGun(wid, { skinId: skin.id, chromaId: skin.chromas[0]?.id ?? '', ...patch });
   };
 
   const usedInstances = new Set(draft?.guns.map((g) => g.charmInstanceId).filter(Boolean));
@@ -207,16 +218,19 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
     : [];
   const ownedBuddies = catalog.buddies.filter((b) => b.levelId && owned.buddyInstances[b.levelId]?.length);
 
-  const art = (w: CatalogWeapon, g?: LoadoutGun) => gunArt(w, g ? skinById.get(g.skinId) : undefined, g);
+  const art = (w: CatalogWeapon, g?: LoadoutGun) => gunArt(w, g ? skinById.get(g.skinId) : undefined, g, isGunRender);
 
-  /** Below the top level only the base variant exists, so dropping a level resets the variant. */
+  /** Below the top level only the base variant exists: dropping a level parks the variant, the top level puts it back. */
   const pickLevel = (wid: string, skin: CatalogSkin, li: number) => {
-    const patch: Partial<LoadoutGun> = { skinLevelId: skin.levels[li].id };
-    if (!isTopLevel(skin, li) && skin.chromas[0]) patch.chromaId = skin.chromas[0].id;
-    setGun(wid, patch);
+    const key = `${wid}:${skin.id}`;
+    const r = moveToLevel(skin, gunOf(wid) ?? { chromaId: '' }, li, heldVariant.current.get(key));
+    if (r.held) heldVariant.current.set(key, r.held);
+    else heldVariant.current.delete(key);
+    setGun(wid, r.patch);
   };
-  /** A variant needs the top level, so picking one upgrades the gun to it. */
+  /** A variant needs the top level, so picking one upgrades the gun to it. An explicit pick replaces a parked one. */
   const pickChroma = (wid: string, skin: CatalogSkin, ci: number) => {
+    heldVariant.current.delete(`${wid}:${skin.id}`);
     const patch: Partial<LoadoutGun> = { chromaId: skin.chromas[ci].id };
     if (ci > 0 && skin.levels.length) patch.skinLevelId = skin.levels[skin.levels.length - 1].id;
     setGun(wid, patch);
@@ -258,6 +272,7 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
                     return (
                       <button
                         key={w.id}
+                        data-weapon={w.id}
                         onClick={() => setWeaponId(w.id)}
                         aria-pressed={on}
                         className={cx('press group relative flex h-[168px] flex-col overflow-hidden rounded-[22px] bg-surface text-left ring-inset transition-shadow duration-[240ms] ease-out', on ? 'ring-2 ring-white' : 'ring-1 ring-white/[0.06] hover:ring-white/[0.18]')}
@@ -349,6 +364,15 @@ export function LoadoutScreen({ connected }: { connected: boolean }) {
                 <>
                   <div className="relative flex h-[190px] items-center justify-center" style={{ background: `radial-gradient(ellipse 70% 62% at 50% 60%, ${tint(tierBy.get(selSkin?.tierId ?? '')?.color, 0.26)}, transparent 74%)` }}>
                     <Img src={img(art(weapon, gun))} alt={selSkin?.name ?? weapon.name} className="max-h-[132px] max-w-[84%] object-contain drop-shadow-[0_16px_22px_rgba(0,0,0,0.6)]" />
+                    <button
+                      data-close-panel
+                      onClick={closePanel}
+                      title="Close (Esc)"
+                      aria-label={`Close ${weapon.name}`}
+                      className="press absolute right-3.5 top-3.5 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-ink hover:bg-white/20"
+                    >
+                      <X size={16} weight="bold" />
+                    </button>
                   </div>
                   <div className="flex flex-col gap-6 px-5 pb-6 xl:px-6">
                     <div className="flex items-start justify-between gap-3">

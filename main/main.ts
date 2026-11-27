@@ -218,11 +218,15 @@ function createWindow(): BrowserWindow {
     s.x != null &&
     s.y != null &&
     screen.getAllDisplays().some((d) => s.x! >= d.bounds.x - 50 && s.y! >= d.bounds.y - 50 && s.x! < d.bounds.x + d.bounds.width && s.y! < d.bounds.y + d.bounds.height);
+  // Capture runs render off-screen: even an inactive window on screen covers the game being played.
+  // SEXYVAL_SHOTS_VISIBLE=1 puts it back on screen for watching a run.
+  const offscreen = !!SHOTS && process.env.SEXYVAL_SHOTS_VISIBLE !== '1';
   const w = new BrowserWindow({
     width: Math.max(1100, s.width),
     height: Math.max(680, s.height),
-    x: onScreen ? s.x : undefined,
-    y: onScreen ? s.y : undefined,
+    x: offscreen ? -20000 : onScreen ? s.x : undefined,
+    y: offscreen ? 0 : onScreen ? s.y : undefined,
+    skipTaskbar: offscreen,
     minWidth: 1100,
     minHeight: 680,
     show: false,
@@ -243,7 +247,7 @@ function createWindow(): BrowserWindow {
       backgroundThrottling: !SHOTS,
     },
   });
-  if (s.maximized) w.maximize();
+  if (s.maximized && !offscreen) w.maximize();
   w.removeMenu();
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   w.webContents.on('will-navigate', (e, url) => {

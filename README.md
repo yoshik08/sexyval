@@ -4,10 +4,22 @@ Personal, unofficial Valorant companion for Windows, in a normal desktop window,
 
 > Not affiliated with Riot Games. Uses unofficial endpoints (valapidocs.techchrism.me / valorant-api-types) that can change or break at any time. Personal use only. No instalock, no gameplay automation; the only overlay is the optional agent-select pill (map + starting side) described below. Agent select/lock endpoints are deliberately not implemented. Party, queue and loadout changes only happen when you press a button.
 
+## What's new in 1.9.2
+
+Installed copies update themselves; the installer below is only for a first install.
+
+### Loadout
+- **Close button on the weapon panel.** The ✕ at its top right, or Esc, puts the panel back to "Choose a weapon". With a dropdown or the skin sheet open, Esc closes that first.
+- **Level 4 keeps your variant.** Below the top level a gun is on its base variant, as in game. Going back up now brings back the variant it had (also after switching to another skin and back), instead of showing the base look.
+- **The weapon art shows the level you picked** (new in 1.9.1). Level icons that are effect stills instead of the gun (Prime, Oni, Sovereign...) are skipped. Picking a variant moves the gun to the top level, since variants need it.
+
+### Fixed
+- **"Waiting for Valorant" is centred again.** Since 1.9.0 the radar sat at the top of the Live tab.
+
 ## Install
 
-- `release/SexyVal-Setup-1.9.1.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
-- `release/SexyVal-Portable-1.9.1.exe` runs without installing.
+- `release/SexyVal-Setup-1.9.2.exe` is the NSIS installer (per-user, lets you pick the folder). It upgrades earlier versions in place; close SexyVal (tray icon, Quit) first.
+- `release/SexyVal-Portable-1.9.2.exe` runs without installing.
 
 The builds are unsigned, so Windows SmartScreen will warn. Click "More info", then "Run anyway".
 

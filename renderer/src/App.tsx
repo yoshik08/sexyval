@@ -371,7 +371,9 @@ export function App() {
         {/* window drag strip; stops short of the native window controls */}
         <div className="drag absolute inset-x-0 top-0 z-20 h-10 pr-[148px]" />
         <div ref={scrollRef} className={cx('h-full pt-10 [scrollbar-gutter:stable]', view === 'collection' ? 'overflow-hidden' : 'overflow-y-auto')}>
-          <div key={view} className={cx('screen-in', view === 'collection' && 'h-full')}>
+          {/* Full height for screens that size themselves to the window (Collection's grid, Live's centred waiting
+              state and full-bleed match views); content taller than that still scrolls the container. */}
+          <div key={view} className={cx('screen-in', (view === 'collection' || view === 'live') && 'h-full')}>
           {view === 'live' && <LiveScreen state={state} onLoadout={toLoadout} />}
           {view === 'shop' && <ShopScreen initialTab={sub === 'night' || sub === 'bundles' || sub === 'past' || sub === 'history' || sub === 'spending' ? sub : 'daily'} connected={connected} myPuuid={state?.conn.puuid} />}
           {view === 'collection' && <CollectionScreen />}
